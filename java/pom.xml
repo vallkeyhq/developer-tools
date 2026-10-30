@@ -22,7 +22,7 @@
     <dependency>
       <groupId>net.bytebuddy</groupId>
       <artifactId>byte-buddy</artifactId>
-      <version>1.18.14</version>
+      <version>1.18.16</version>
     </dependency>
     <!-- Only compiled against: the agent changes these libraries where the app has them. -->
     <dependency>
