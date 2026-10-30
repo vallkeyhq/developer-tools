@@ -1,3 +1,5 @@
+![Vallkey cli](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/cli.png)
+
 # vallkey
 
 Swap the API keys in your project for ghost keys: stand-in keys that only work within your rules, and that you can kill in one click.
@@ -11,23 +13,23 @@ npx vallkey init    # swap the keys in your .env files for ghost keys
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `login` | Opens your browser to approve this computer. The tool gets its own API token, which you can revoke in Settings → API tokens. |
-| `init [files]` | Finds API keys in your `.env` files, creates a ghost key for each one, and writes the ghost keys back in place of the real ones. Adds `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or `GROQ_BASE_URL` so those SDKs need no code change, and prints the one line to change for the others. `--dry-run` shows what it would do. |
-| `scan [paths]` | Looks for API keys in your code and `.env` files; `--history` also looks through every commit. Keys are shown masked. Exits with 1 if it finds any. |
-| `keys` | Lists your ghost keys. |
-| `keys add --from <id>` | Makes another ghost key for a real key shared by several ghost keys, inside its outer rules. |
-| `real-keys` | Lists the real keys shared by several ghost keys. |
-| `domains` | Lists your own API domains, such as api.yourcompany.com; `domains check <domain>` checks one. `init` uses your default domain for the address it writes. |
-| `kill <key id>` | Stops a ghost key everywhere, right away. |
-| `mcp` | Runs the MCP server for AI coding agents (see below). |
-| `connect [language]` | Detects the project and prints how to connect it: the SDK address setting, or auto-connect. Read-only; does not install packages or change settings. |
-| `doctor` | Checks local gateway configuration and Node/Bun package readiness. `--json` returns structured checks. It does not inspect a deployed process. |
-| `verify <key id> --request-id <id>` | Checks the exact recent application request in Activity. `--expect denied` verifies a blocked request; no provider calls are generated. |
-| `hook [language]` | Turns on auto-connect, so supported SDKs go through Vallkey with no code changes (see below). |
-| `status [key id]` | Shows every app each ghost key is used from (Vercel, AWS Lambda, a laptop…), with today's requests and anything wrong. Exits with 1 if one is failing, so a deploy script can stop on it. |
-| `whoami`, `logout` | Shows or removes the saved sign-in. |
+| Command                             | What it does                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `login`                             | Opens your browser to approve this computer. The tool gets its own API token, which you can revoke in Settings → API tokens.                                                                                                                                                                                              |
+| `init [files]`                      | Finds API keys in your `.env` files, creates a ghost key for each one, and writes the ghost keys back in place of the real ones. Adds `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` or `GROQ_BASE_URL` so those SDKs need no code change, and prints the one line to change for the others. `--dry-run` shows what it would do. |
+| `scan [paths]`                      | Looks for API keys in your code and `.env` files; `--history` also looks through every commit. Keys are shown masked. Exits with 1 if it finds any.                                                                                                                                                                       |
+| `keys`                              | Lists your ghost keys.                                                                                                                                                                                                                                                                                                    |
+| `keys add --from <id>`              | Makes another ghost key for a real key shared by several ghost keys, inside its outer rules.                                                                                                                                                                                                                              |
+| `real-keys`                         | Lists the real keys shared by several ghost keys.                                                                                                                                                                                                                                                                         |
+| `domains`                           | Lists your own API domains, such as api.yourcompany.com; `domains check <domain>` checks one. `init` uses your default domain for the address it writes.                                                                                                                                                                  |
+| `kill <key id>`                     | Stops a ghost key everywhere, right away.                                                                                                                                                                                                                                                                                 |
+| `mcp`                               | Runs the MCP server for AI coding agents (see below).                                                                                                                                                                                                                                                                     |
+| `connect [language]`                | Detects the project and prints how to connect it: the SDK address setting, or auto-connect. Read-only; does not install packages or change settings.                                                                                                                                                                      |
+| `doctor`                            | Checks local gateway configuration and Node/Bun package readiness. `--json` returns structured checks. It does not inspect a deployed process.                                                                                                                                                                            |
+| `verify <key id> --request-id <id>` | Checks the exact recent application request in Activity. `--expect denied` verifies a blocked request; no provider calls are generated.                                                                                                                                                                                   |
+| `hook [language]`                   | Turns on auto-connect, so supported SDKs go through Vallkey with no code changes (see below).                                                                                                                                                                                                                             |
+| `status [key id]`                   | Shows every app each ghost key is used from (Vercel, AWS Lambda, a laptop…), with today's requests and anything wrong. Exits with 1 if one is failing, so a deploy script can stop on it.                                                                                                                                 |
+| `whoami`, `logout`                  | Shows or removes the saved sign-in.                                                                                                                                                                                                                                                                                       |
 
 Your real keys are stored encrypted and removed from the files, and Vallkey never shows a real key again. If you use one anywhere else, keep a copy in your password manager.
 
@@ -43,16 +45,16 @@ Start with `npx vallkey connect`: it detects known Node/Bun SDK dependencies and
 
 `npx vallkey hook` turns on auto-connect: requests that carry a ghost key go to Vallkey through the usual HTTP clients, with no code changes. It detects the language, downloads any file it needs (checksum verified), and prints the one setting to add, with Docker lines where needed. If that setting already has a value, add to it instead of replacing it. On Next.js it adds a small setup file (`instrumentation.ts`); Edge routes need the SDK address setting. Use `--print` for a preview, and check one request from your deployed app.
 
-| Language | What it sets |
-|---|---|
-| Node.js | `NODE_OPTIONS='--require vallkey/auto'` (Next.js: an `instrumentation.ts` instead) |
-| Bun | `BUN_OPTIONS='--preload vallkey/auto'` |
-| Python | `VALLKEY_AUTO=1` (with `pip install vallkey`) |
-| Ruby | `RUBYOPT=-rvallkey/auto` (with `bundle add vallkey`) |
-| Java, Kotlin, Scala | `JAVA_TOOL_OPTIONS=-javaagent:/path/vallkey-agent.jar` |
-| .NET | `DOTNET_STARTUP_HOOKS=/path/Vallkey.Auto.dll` |
-| PHP | `PHP_INI_SCAN_DIR=:/path/to/its/ini/folder` |
-| Elixir, Erlang | `ELIXIR_ERL_OPTIONS` / `ERL_FLAGS` with an `-eval` that loads it |
+| Language            | What it sets                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| Node.js             | `NODE_OPTIONS='--require vallkey/auto'` (Next.js: an `instrumentation.ts` instead) |
+| Bun                 | `BUN_OPTIONS='--preload vallkey/auto'`                                             |
+| Python              | `VALLKEY_AUTO=1` (with `pip install vallkey`)                                      |
+| Ruby                | `RUBYOPT=-rvallkey/auto` (with `bundle add vallkey`)                               |
+| Java, Kotlin, Scala | `JAVA_TOOL_OPTIONS=-javaagent:/path/vallkey-agent.jar`                             |
+| .NET                | `DOTNET_STARTUP_HOOKS=/path/Vallkey.Auto.dll`                                      |
+| PHP                 | `PHP_INI_SCAN_DIR=:/path/to/its/ini/folder`                                        |
+| Elixir, Erlang      | `ELIXIR_ERL_OPTIONS` / `ERL_FLAGS` with an `-eval` that loads it                   |
 
 Set `VALLKEY_ENV=production` (or staging, eu-workers…) in each app to tell them apart in the dashboard and in `vallkey status`.
 

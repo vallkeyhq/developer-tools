@@ -5,9 +5,24 @@
   "license": "MIT",
   "description": "CLI and runtime integrations for Vallkey.",
   "scripts": {
+    "build": "npm --prefix cli run build",
+    "typecheck": "npm --prefix cli run typecheck && tsc -p tsconfig.tooling.json",
     "test": "npm --prefix cli test",
-    "check": "node scripts/check-repository.mjs",
-    "check:artifacts": "node scripts/check-hook-artifacts.mjs",
-    "scan": "node cli/bin/vallkey.js scan ."
-  }
+    "check": "tsx scripts/check-repository.mts",
+    "check:artifacts": "tsx scripts/check-hook-artifacts.mts",
+    "scan": "node cli/dist/bin/vallkey.js scan .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:package": "tsx scripts/check-package.mts",
+    "covers": "tsx scripts/render-covers.mts"
+  },
+  "devDependencies": {
+    "@types/node": "18.19.130",
+    "prettier": "3.6.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  },
+  "workspaces": [
+    "examples/stripe-demo"
+  ]
 }

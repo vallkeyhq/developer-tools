@@ -9,22 +9,31 @@
   },
   "type": "module",
   "bin": {
-    "vallkey": "bin/vallkey.js"
+    "vallkey": "dist/bin/vallkey.js"
   },
   "exports": {
-    "./auto": "./src/auto.cjs",
-    "./session": "./src/session.cjs",
+    "./auto": {
+      "types": "./dist/src/auto.d.cts",
+      "default": "./dist/src/auto.cjs"
+    },
+    "./session": {
+      "types": "./dist/src/session.d.cts",
+      "default": "./dist/src/session.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "bin",
-    "src"
+    "dist/bin",
+    "dist/src"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json && tsx ../scripts/copy-build-assets.mts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && tsx --test test/*.test.ts",
+    "prepack": "npm run build"
   },
   "homepage": "https://vallkey.com/docs/",
   "keywords": [

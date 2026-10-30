@@ -13,7 +13,7 @@ Use component-qualified tags, such as `cli-v0.9.0`, `python-v0.4.0`, and `hooks-
 
 ## npm
 
-The package is built from `cli/`. Run `npm pack --dry-run` there and inspect the file list, then create and inspect the actual archive before publishing. The JavaScript hook and session helper ship with the CLI.
+The package is built from `cli/`. Install the root development dependencies with `npm ci`, then run `npm run build`. The prepack script rebuilds the TypeScript source. Only compiled runtime files, declarations, README and license are packed; development source and tests are excluded. Run `npm run check:package` to exercise the installed artifact. Run `npm pack --dry-run` there and inspect the file list, then create and inspect the actual archive before publishing. The JavaScript hook and session helper ship with the CLI.
 
 Configure npm trusted publishing for `vallkeyhq/developer-tools` and the exact publishing workflow filename before enabling automated publication. npm requires matching repository metadata and a supported Node/npm version. Do not substitute a developer’s personal npm token for repository ownership setup.
 
@@ -27,10 +27,10 @@ Build the Ruby gem from `ruby/`, inspect its contents and metadata, and run the 
 
 `artifacts/hooks/0.1.0/` preserves the existing installer release and its published hashes. These files are a historical release baseline, not binaries rebuilt from an unreleased change in this checkout.
 
-For a new release, update the source versions and `VERSION` in `scripts/build-hooks.mjs`, then run:
+For a new release, update the source versions and `VERSION` in `scripts/build-hooks.mts`, then run:
 
 ```sh
-node scripts/build-hooks.mjs
+npx tsx scripts/build-hooks.mts
 npm run check:artifacts
 npm test
 ```
@@ -44,3 +44,5 @@ The Java agent bundles Byte Buddy and ASM notices. Preserve those notices when s
 CI in this checkout validates source and packaging; it does not upload packages or create releases. Publishing workflows and registry trust bindings are enabled only after repository ownership, release permissions, and package access are verified.
 
 References: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/), [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
+
+Package README banners use absolute URLs to public artwork so registries can render them independently of the repository layout. Verify those image URLs when preparing a registry release.

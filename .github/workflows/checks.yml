@@ -24,12 +24,14 @@ jobs:
         with:
           node-version: '${{ matrix.node }}'
           package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
       - run: npm test
       - run: npm run check
       - run: npm run check:artifacts
       - run: npm run scan
-      - run: npm pack --dry-run
-        working-directory: cli
+      - run: npm run check:package
+      - run: npm run format:check
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -66,7 +68,8 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - run: node scripts/check-native-hooks.mjs ${{ matrix.package }}
+      - run: npm ci --ignore-scripts
+      - run: npx tsx scripts/check-native-hooks.mts ${{ matrix.package }}
 
   examples:
     runs-on: ubuntu-latest
