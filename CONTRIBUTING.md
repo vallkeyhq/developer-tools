@@ -4,7 +4,7 @@ Open an issue for substantial behavior or API changes before implementing them. 
 
 Use synthetic credentials. Default tests must run without a production account, paid provider calls, or access to the private gateway source.
 
-## CLI and JavaScript
+## CLI and TypeScript
 
 ```sh
 npm ci
@@ -17,6 +17,8 @@ npm run format:check
 npm run scan
 npm pack ./cli --dry-run
 ```
+
+The root npm workspace installs the example’s SDK dependency as well as build tools, so a clean `npm ci` is sufficient before type checking.
 
 `cli/src/` is TypeScript source. Do not edit compiled files in `cli/dist/`.
 
