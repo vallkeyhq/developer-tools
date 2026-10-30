@@ -1,0 +1,44 @@
+{
+  "name": "vallkey",
+  "version": "0.8.1",
+  "description": "Replace the API keys in your project with ghost keys that only work within your rules.",
+  "license": "MIT",
+  "author": "Vallkey",
+  "bugs": {
+    "url": "https://github.com/vallkeyhq/developer-tools/issues"
+  },
+  "type": "module",
+  "bin": {
+    "vallkey": "bin/vallkey.js"
+  },
+  "exports": {
+    "./auto": "./src/auto.cjs",
+    "./session": "./src/session.cjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "homepage": "https://vallkey.com/docs/",
+  "keywords": [
+    "api-keys",
+    "secrets",
+    "security",
+    "openai",
+    "stripe",
+    "anthropic",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vallkeyhq/developer-tools.git",
+    "directory": "cli"
+  }
+}

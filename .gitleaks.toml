@@ -1,0 +1,19 @@
+title = "Vallkey source scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact published SHA-256 artifact checksums, verified by check-hook-artifacts.mjs"
+condition = "AND"
+paths = ['''^cli/src/hooks\.json$''']
+regexTarget = "line"
+regexes = [
+  '''^\s*"Vallkey\.Auto-0\.1\.0\.dll": "0aa619757526cdde1257b139dc5c3f2fcd4b5f6366dc21794142b316dc8422b2",\s*$''',
+  '''^\s*"vallkey-0\.1\.0\.gem": "60cb3fcf5dd5f496ab3bc22c44ea23d3b646a6cb35eac489a12c6cb1d969fe2f",\s*$''',
+  '''^\s*"vallkey-agent-0\.1\.0\.jar": "cb7d01d58113bf4abd3e7a72e5a1f388fbc5e0202afb75c2acaf89fad35cf0af",\s*$''',
+  '''^\s*"vallkey_auto-0\.1\.0\.beam": "c661bc87f449a628a935a33b6ab42644c8596b8be577fbd89a69d7cd8373336e"\s*$''',
+]

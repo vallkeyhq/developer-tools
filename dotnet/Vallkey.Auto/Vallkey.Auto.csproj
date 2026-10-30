@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <AssemblyName>Vallkey.Auto</AssemblyName>
+    <RootNamespace>Vallkey.Auto</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Vallkey</Authors>
+    <Description>Vallkey runtime integration for HttpClient.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://vallkey.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vallkeyhq/developer-tools</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

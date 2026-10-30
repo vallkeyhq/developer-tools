@@ -1,0 +1,13 @@
+{
+  "name": "vallkey-developer-tools",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "CLI and runtime integrations for Vallkey.",
+  "scripts": {
+    "test": "npm --prefix cli test",
+    "check": "node scripts/check-repository.mjs",
+    "check:artifacts": "node scripts/check-hook-artifacts.mjs",
+    "scan": "node cli/bin/vallkey.js scan ."
+  }
+}

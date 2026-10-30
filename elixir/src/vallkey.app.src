@@ -1,0 +1,8 @@
+{application, vallkey,
+ [{description, "Send any Elixir or Erlang SDK through Vallkey with no code changes"},
+  {vsn, "0.1.0"},
+  {modules, [vallkey_auto]},
+  {registered, []},
+  {applications, [kernel, stdlib, compiler]},
+  {licenses, ["MIT"]},
+  {links, [{"Website", "https://vallkey.com"}]}]}.

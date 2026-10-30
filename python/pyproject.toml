@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+  "hatchling==1.27.0; python_version < '3.10'",
+  "hatchling==1.32.4; python_version >= '3.10'",
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "vallkey"
+version = "0.3.0"
+description = "Vallkey runtime integration for supported Python HTTP clients."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.8"
+authors = [{ name = "Vallkey" }]
+keywords = ["api-keys", "secrets", "security", "openai", "stripe", "anthropic"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://vallkey.com"
+Documentation = "https://vallkey.com/docs/python/"
+Source = "https://github.com/vallkeyhq/developer-tools/tree/main/python"
+Issues = "https://github.com/vallkeyhq/developer-tools/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vallkey"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/vallkey_auto.pth" = "vallkey_auto.pth"

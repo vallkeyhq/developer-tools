@@ -1,0 +1,87 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '${{ matrix.node }}'
+          package-manager-cache: false
+      - run: npm test
+      - run: npm run check
+      - run: npm run check:artifacts
+      - run: npm run scan
+      - run: npm pack --dry-run
+        working-directory: cli
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.8', '3.12', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '${{ matrix.python }}'
+      - run: python -m pip install ./python -r python/requirements-test.txt
+        if: matrix.python != '3.8'
+      - run: python -m pip install ./python
+        if: matrix.python == '3.8'
+      - run: python -m unittest discover -s python/tests
+        env:
+          VALLKEY_REQUIRE_TEST_DEPS: "${{ matrix.python != '3.8' && '1' || '0' }}"
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [ruby, java, dotnet, php, elixir]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: node scripts/check-native-hooks.mjs ${{ matrix.package }}
+
+  examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+        working-directory: examples/stripe-demo
+      - run: npm test
+        working-directory: examples/stripe-demo
+      - run: npm audit --omit=dev
+        working-directory: examples/stripe-demo
