@@ -1,4 +1,4 @@
-![Vallkey ruby](../assets/covers/ruby.png)
+![Vallkey ruby](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/ruby.png)
 
 # vallkey (Ruby)
 

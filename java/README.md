@@ -1,4 +1,4 @@
-![Vallkey java](../assets/covers/java.png)
+![Vallkey java](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/java.png)
 
 # Vallkey Java agent
 

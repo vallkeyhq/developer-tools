@@ -1,4 +1,4 @@
-![Vallkey cli](../assets/covers/cli.png)
+![Vallkey cli](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/cli.png)
 
 # vallkey
 

@@ -1,4 +1,4 @@
-![Vallkey elixir](../assets/covers/elixir.png)
+![Vallkey elixir](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/elixir.png)
 
 # vallkey (Elixir and Erlang)
 

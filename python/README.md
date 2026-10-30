@@ -1,4 +1,4 @@
-![Vallkey python](../assets/covers/python.png)
+![Vallkey python](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/python.png)
 
 # vallkey
 

@@ -45,4 +45,4 @@ CI in this checkout validates source and packaging; it does not upload packages 
 
 References: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/), [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
 
-Package README banners use repository-relative artwork. Before a registry release, verify how the registry renders those links and replace the packaged README image URL with the corresponding immutable public release URL if necessary.
+Package README banners use absolute URLs to public artwork so registries can render them independently of the repository layout. Verify those image URLs when preparing a registry release.

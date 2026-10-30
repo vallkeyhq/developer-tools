@@ -1,4 +1,4 @@
-![Vallkey dotnet](../assets/covers/dotnet.png)
+![Vallkey dotnet](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/dotnet.png)
 
 # Vallkey.Auto (.NET)
 

@@ -1,4 +1,4 @@
-![Vallkey php](../assets/covers/php.png)
+![Vallkey php](https://raw.githubusercontent.com/vallkeyhq/developer-tools/main/assets/covers/php.png)
 
 # vallkey (PHP extension)
 
