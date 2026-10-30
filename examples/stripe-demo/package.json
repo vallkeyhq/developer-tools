@@ -7,7 +7,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "stripe": "23.0.0"
+    "stripe": "23.0.1"
   },
   "devDependencies": {
     "tsx": "4.23.15"
