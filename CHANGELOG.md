@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Migrate maintained JavaScript tooling to strict TypeScript with generated runtime builds and declarations.
+- Preserve Node.js 18, CommonJS preload and ESM import compatibility.
+- Validate API and JSON-RPC envelopes and reject MCP path escapes through symlinks.
+- Add package-installation checks, format checks and coordinated repository covers.
+
 - Prepare a standalone public source tree for the CLI and runtime integrations.
 - Separate hook installer artifacts from the private website source.
 - Document transport coverage, runtime limitations, contribution checks and release boundaries.

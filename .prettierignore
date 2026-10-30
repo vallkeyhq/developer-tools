@@ -1,0 +1,11 @@
+artifacts/
+node_modules/
+**/dist/
+dotnet/**/bin/
+**/obj/
+**/target/
+**/third-party/
+package-lock.json
+**/package-lock.json
+cli/src/hooks.json
+assets/

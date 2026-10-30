@@ -1,3 +1,5 @@
+![Vallkey elixir](../assets/covers/elixir.png)
+
 # vallkey (Elixir and Erlang)
 
 Route ghost-key requests through [Vallkey](https://vallkey.com) using the supported HTTP clients below. Requests that carry a ghost key go to Vallkey, which swaps in the real key under your rules. Every other request is left alone.
@@ -16,11 +18,11 @@ For a plain Erlang release, put the same `-eval` in `ERL_FLAGS`. If the file is 
 
 A release starts auto-connect when its boot finishes, so requests made while your applications are still starting go out as they are.
 
-| Setting | What it does |
-|---|---|
-| `VALLKEY_API` | The Vallkey server (default `https://api.vallkey.com`) |
-| `VALLKEY_AUTO=0` | Turns it off |
-| `VALLKEY_DEBUG=1` | Logs each request sent to Vallkey (never the key) |
+| Setting           | What it does                                           |
+| ----------------- | ------------------------------------------------------ |
+| `VALLKEY_API`     | The Vallkey server (default `https://api.vallkey.com`) |
+| `VALLKEY_AUTO=0`  | Turns it off                                           |
+| `VALLKEY_DEBUG=1` | Logs each request sent to Vallkey (never the key)      |
 
 How it works: the entry points (`Finch.request/3`, `:hackney.request/5`, `:httpc.request/4` and their siblings) are exported under another name in the module as loaded; every other function stays exactly as it was. A call to the usual name reaches Erlang's handler for undefined functions, which Vallkey wraps to change the address of a request carrying a ghost key before calling the original function.
 

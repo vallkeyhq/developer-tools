@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node demo.mjs",
-    "test": "node --test"
+    "start": "tsx demo.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "stripe": "23.0.0"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
   }
 }
