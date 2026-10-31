@@ -244,6 +244,17 @@ describe('the command line', () => {
     assert.match(r.stdout, /OPENAI_API_KEY · shop/);
   });
 
+  it("gives the one-line change in the project's own language", async () => {
+    const project = await mkdtemp(join(dir, 'py-'));
+    await writeFile(join(project, 'requirements.txt'), 'stripe\n');
+    await writeFile(join(project, '.env'), `STRIPE_SECRET_KEY=${STRIPE}\n`);
+    const r = await run(['init', '--yes'], { cwd: project, env: env() });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /stripe\.api_base = "http:\/\/127\.0\.0\.1:\d+"/);
+    assert.doesNotMatch(r.stdout, /process\.env/);
+    assert.match(r.stdout, /npx vallkey connect/);
+  });
+
   it('scans code and git history, and fails so CI can stop', async () => {
     const repo = await mkdtemp(join(dir, 'repo-'));
     const git = (...args) =>

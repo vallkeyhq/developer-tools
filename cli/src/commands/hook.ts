@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { gatewayOrigin } from '../config.js';
 import type { Flags, ProjectPackage } from '../types.js';
@@ -111,6 +112,111 @@ function installCommand(lang: string, names: Set<string>) {
     return 'pip install vallkey';
   }
   return LANGUAGES[lang].install?.[0] ?? null;
+}
+
+// The project's own virtual environment, where pip has to install for the app to see it.
+async function venvPython(cwd: string) {
+  const dirs = [process.env.VIRTUAL_ENV, ...['.venv', 'venv', 'env'].map((d) => join(cwd, d))];
+  for (const dir of dirs) {
+    if (!dir || !resolve(dir).startsWith(resolve(cwd))) continue;
+    for (const bin of [join(dir, 'bin', 'python'), join(dir, 'Scripts', 'python.exe')])
+      if (await exists(bin)) return bin;
+  }
+  return null;
+}
+
+// Whether the app can already load the package, so nothing needs installing.
+export async function installed(lang: string, cwd: string, names: Set<string>) {
+  if (lang === 'node' || lang === 'bun') {
+    try {
+      createRequire(join(cwd, 'package.json')).resolve('vallkey/auto');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (lang === 'python') {
+    // Listed for deploys, and present in the local environment when there is one.
+    const listed = names.has('requirements.txt')
+      ? /^\s*vallkey\b/im.test(await readFile(join(cwd, 'requirements.txt'), 'utf8'))
+      : names.has('pyproject.toml') &&
+        /["']vallkey\b/.test(await readFile(join(cwd, 'pyproject.toml'), 'utf8'));
+    const py = await venvPython(cwd);
+    if (!py) return listed;
+    try {
+      execFileSync(py, ['-c', 'import vallkey'], { stdio: 'ignore' });
+      return listed;
+    } catch {
+      return false;
+    }
+  }
+  if (lang === 'ruby' && names.has('Gemfile.lock'))
+    return /^ {4}vallkey \(/m.test(await readFile(join(cwd, 'Gemfile.lock'), 'utf8'));
+  return false;
+}
+
+function runCommand(command: string, cwd: string) {
+  const [file, ...args] = command.split(' ');
+  // Fixed commands only (no user input), so a shell on Windows is safe and finds npm.cmd.
+  execFileSync(file, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+}
+
+// Step 1 of most setups: show the install command, or with consent run it.
+async function installStep(lang: string, cwd: string, names: Set<string>, flags: Flags) {
+  const command = installCommand(lang, names) ?? 'npm install vallkey';
+  if (await installed(lang, cwd, names)) {
+    out(`  1. ${green('✓')} The vallkey package is installed`);
+    return true;
+  }
+  // pip without a project environment: installing would go to the wrong Python.
+  const pip = lang === 'python' && command === 'pip install vallkey';
+  const py = pip ? await venvPython(cwd) : null;
+  // No terminal to ask in and no --yes (CI, scripts): show it, as before, and change nothing.
+  const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+  if (preview || (pip && !py && !names.has('requirements.txt'))) {
+    out(`  1. ${cyan(command)}`);
+    if (lang === 'python')
+      out(
+        dim(
+          '     Add vallkey to your project dependencies and install it in the virtual environment used by the app.',
+        ),
+      );
+    // A preview is complete as shown; otherwise this step is still to do.
+    return preview;
+  }
+  const doing = pip
+    ? [
+        names.has('requirements.txt') && 'add vallkey to requirements.txt',
+        py && `run pip install vallkey in ${relative(cwd, resolve(py, '../..'))}`,
+      ]
+        .filter(Boolean)
+        .join(' and ')
+    : `run ${command}`;
+  if (!(await confirm(`  Install the vallkey package: ${doing}?`, { yes: flags.yes }))) {
+    out(`  1. ${cyan(command)}`);
+    return false;
+  }
+  try {
+    if (pip) {
+      if (names.has('requirements.txt')) {
+        const text = await readFile(join(cwd, 'requirements.txt'), 'utf8');
+        if (!/^\s*vallkey\b/im.test(text))
+          await appendFile(
+            join(cwd, 'requirements.txt'),
+            `${text && !text.endsWith('\n') ? '\n' : ''}vallkey\n`,
+          );
+      }
+      if (py) execFileSync(py, ['-m', 'pip', 'install', 'vallkey'], { cwd, stdio: 'inherit' });
+    } else runCommand(command, cwd);
+  } catch {
+    throw new CliError(`Installing the vallkey package failed. Run it yourself: ${command}`);
+  }
+  out(`  1. ${green('✓')} Installed the vallkey package`);
+  if (pip && !py)
+    out(
+      dim('     Added to requirements.txt. Install it where the app runs: pip install -r requirements.txt'),
+    );
+  return true;
 }
 
 export function phpFile({
@@ -274,7 +380,7 @@ export async function hook(args: string[], flags: Flags) {
       }
       const code =
         "export async function register() {\n  // Sends server requests that carry a ghost key to Vallkey.\n  if (process.env.NEXT_RUNTIME === 'nodejs') {\n    await import('vallkey/auto');\n  }\n}\n";
-      out(`  1. ${cyan(installCommand(lang, names))}`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (await exists(join(cwd, file))) {
         out(`  2. In ${file}, inside register(), when NEXT_RUNTIME is 'nodejs':`);
         out(`       ${cyan("await import('vallkey/auto');")}`);
@@ -308,7 +414,7 @@ export async function hook(args: string[], flags: Flags) {
         lang === 'ruby'
           ? 'require "vallkey/auto"'
           : `import 'vallkey/auto'   ${dim("// or require('vallkey/auto')")}`;
-      out(`  1. ${cyan(installCommand(lang, names) ?? 'npm install vallkey')}`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       out(
         `  2. Make this the first line of each function${lang === 'ruby' ? ' (api/*.rb)' : ' (api/*.js, api/*.ts)'}:`,
       );
@@ -331,7 +437,7 @@ export async function hook(args: string[], flags: Flags) {
         : runner.test(start)
           ? start.replace(runner, `${lang} ${flag} `)
           : `${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' ${start}`;
-      out(`  1. ${cyan(installCommand(lang, names))}`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (loaded) {
         out(`  2. ${green('✓')} Your start script already turns on auto-connect.`);
       } else if (flags.print) {
@@ -385,7 +491,7 @@ export async function hook(args: string[], flags: Flags) {
         : /\bruby\s/.test(web)
           ? web.replace(/\bruby\s/, 'ruby -rvallkey/auto ')
           : `RUBYOPT=-rvallkey/auto ${web}`;
-      out(`  1. ${cyan(installCommand(lang, names))}`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (web === updated) out(`  2. ${green('✓')} Your Procfile already turns on auto-connect.`);
       else {
         out('  2. Load it when your app starts. In your Procfile:');
@@ -403,9 +509,7 @@ export async function hook(args: string[], flags: Flags) {
     }
 
     let env: Record<string, string> = {};
-    const steps = [];
     const install = installCommand(lang, names);
-    if (install) steps.push(install);
     let docker: string[] = [];
 
     if (lang === 'php') {
@@ -518,16 +622,14 @@ export async function hook(args: string[], flags: Flags) {
     }
 
     let n = 1;
-    for (const step of steps) out(`  ${n++}. ${cyan(step)}`);
-    if (lang === 'python')
-      out(
-        dim(
-          '     Add vallkey to your project dependencies and install it in the virtual environment used by the app.',
-        ),
-      );
+    if (install) {
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
+      n++;
+    }
     if (env) {
       out(`  ${n++}. Set this in your app's environment (hosting dashboard, process manager or shell):`);
       for (const line of envLines(env)) out(`       ${cyan(line)}`);
+      if (api && lang === 'python') out(`       ${cyan(`VALLKEY_API=${api}`)}`);
       // The installed vallkey 0.3 reads it when Python starts, before python-dotenv and
       // similar load .env, so a value there is never seen.
       if (lang === 'python')
@@ -559,7 +661,7 @@ export async function hook(args: string[], flags: Flags) {
       out('     Or, in your Dockerfile:');
       for (const line of dockerEnv(env)) out(`       ${cyan(line)}`);
     }
-    if (api) out(`       ${cyan(`VALLKEY_API=${api}`)}`);
+    if (api && lang !== 'python') out(`       ${cyan(`VALLKEY_API=${api}`)}`);
     out(`  ${n}. Restart the app.`);
     out();
     if (lang === 'ruby' || lang === 'node' || lang === 'bun') {
@@ -573,9 +675,7 @@ export async function hook(args: string[], flags: Flags) {
   }
   // vallkey connect prints its own "Then check it".
   if (!flags.embedded && !status) {
-    next([
-      `After a request from your app: ${cyan('npx vallkey verify <key id> --request-id <x-guard-request-id>')}`,
-    ]);
+    next([`Restart your app, then ${cyan('npx vallkey verify')} and make one safe request`]);
   }
   return status;
 }
