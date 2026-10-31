@@ -153,13 +153,16 @@ def _remember(owner, name, wrapper):
 def _rewrite_httpx(request):
     try:
         url = request.url
-        if url.scheme not in ("http", "https") or _is_vallkey(url.host, url.port, url.scheme):
+        if url.scheme not in ("http", "https"):
             return
         try:
             body = request.content
         except Exception:  # a streamed body that has not been read
             body = None
         if not _has_ghost(url.query, request.headers.multi_items(), body):
+            return
+        if _is_vallkey(url.host, url.port, url.scheme):
+            request.headers[WHO_HEADER] = _who_value()
             return
         t = _Target()
         _log(url.scheme, url.host, url.port, url.path, t)
@@ -201,7 +204,10 @@ def _patch_requests(requests):
         try:
             u = urlsplit(request.url)
             body = request.body if isinstance(request.body, (str, bytes, bytearray)) else None
-            if u.scheme in ("http", "https") and not _is_vallkey(u.hostname, u.port, u.scheme) and _has_ghost(u.query, request.headers.items(), body):
+            ghost = u.scheme in ("http", "https") and _has_ghost(u.query, request.headers.items(), body)
+            if ghost and _is_vallkey(u.hostname, u.port, u.scheme):
+                request.headers[WHO_HEADER] = _who_value()
+            elif ghost:
                 t = _Target()
                 _log(u.scheme, u.hostname, u.port, u.path, t)
                 request.url = urlunsplit((t.scheme, t.netloc, u.path, u.query, u.fragment))
@@ -230,7 +236,10 @@ def _patch_urllib3(urllib3):
             if headers is None:
                 headers = self.headers
             body = kwargs.get("body")
-            if u.scheme in ("http", "https") and not _is_vallkey(u.hostname, u.port, u.scheme) and _has_ghost(u.query, list(headers.items()), body if isinstance(body, (str, bytes, bytearray)) else None):
+            ghost = u.scheme in ("http", "https") and _has_ghost(u.query, list(headers.items()), body if isinstance(body, (str, bytes, bytearray)) else None)
+            if ghost and _is_vallkey(u.hostname, u.port, u.scheme):
+                kwargs["headers"] = {**headers, WHO_HEADER: _who_value()}
+            elif ghost:
                 t = _Target()
                 _log(u.scheme, u.hostname, u.port, u.path, t)
                 url = urlunsplit((t.scheme, t.netloc, u.path, u.query, u.fragment))
@@ -256,7 +265,10 @@ def _patch_botocore(httpsession):
         try:
             u = urlsplit(request.url)
             body = request.body if isinstance(request.body, (str, bytes, bytearray)) else None
-            if u.scheme in ("http", "https") and not _is_vallkey(u.hostname, u.port, u.scheme) and _has_ghost(u.query, request.headers.items(), body):
+            ghost = u.scheme in ("http", "https") and _has_ghost(u.query, request.headers.items(), body)
+            if ghost and _is_vallkey(u.hostname, u.port, u.scheme):
+                request.headers[WHO_HEADER] = _who_value()
+            elif ghost:
                 t = _Target()
                 _log(u.scheme, u.hostname, u.port, u.path, t)
                 request.url = urlunsplit((t.scheme, t.netloc, u.path, u.query, u.fragment))
@@ -285,7 +297,7 @@ def _patch_aiohttp(aiohttp):
             base = getattr(self, "_base_url", None)
             if not url.is_absolute() and base is not None:
                 url = base.join(url)
-            if url.scheme in ("http", "https") and not _is_vallkey(url.host, url.port, url.scheme):
+            if url.scheme in ("http", "https"):
                 headers = []
                 for source in (getattr(self, "_default_headers", None), kwargs.get("headers")):
                     if source:
@@ -297,7 +309,10 @@ def _patch_aiohttp(aiohttp):
                 if isinstance(params, dict):
                     headers.extend((k, v) for k, v in params.items() if isinstance(v, str))
                 data = kwargs.get("data")
-                if _has_ghost(url.query_string, headers, data if isinstance(data, (str, bytes)) else None):
+                ghost = _has_ghost(url.query_string, headers, data if isinstance(data, (str, bytes)) else None)
+                if ghost and _is_vallkey(url.host, url.port, url.scheme):
+                    kwargs["headers"] = {**(kwargs.get("headers") or {}), WHO_HEADER: _who_value()}
+                elif ghost:
                     t = _Target()
                     _log(url.scheme, url.host, url.port, url.path, t)
                     str_or_url = url.with_scheme(t.scheme).with_host(t.host).with_port(t.port)
@@ -325,7 +340,10 @@ def _patch_urllib(urllib_request):
             u = urlsplit(req.full_url)
             headers = list(req.headers.items()) + list(req.unredirected_hdrs.items())
             body = req.data if isinstance(req.data, (bytes, str)) else None
-            if u.scheme in ("http", "https") and not _is_vallkey(u.hostname, u.port, u.scheme) and _has_ghost(u.query, headers, body):
+            ghost = u.scheme in ("http", "https") and _has_ghost(u.query, headers, body)
+            if ghost and _is_vallkey(u.hostname, u.port, u.scheme):
+                req.unredirected_hdrs[WHO_HEADER.capitalize()] = _who_value()
+            elif ghost:
                 t = _Target()
                 _log(u.scheme, u.hostname, u.port, u.path, t)
                 req.full_url = urlunsplit((t.scheme, t.netloc, u.path, u.query, u.fragment))

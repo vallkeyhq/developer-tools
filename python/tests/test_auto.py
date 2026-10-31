@@ -195,6 +195,59 @@ class AutoTest(unittest.TestCase):
         self.assertEqual(out, "vallkey provider")
         self.assertTrue(any(s["path"] == "/emails" and s["server"] == "vallkey" for s in SEEN))
 
+    def test_names_the_app_on_ghost_key_requests_already_addressed_to_vallkey(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, json, os, urllib.request
+            api = os.environ['VALLKEY_API']
+            send = lambda path, headers: json.load(urllib.request.urlopen(urllib.request.Request(api + path, data=b'{}', headers=headers)))['from']
+            print(send('/v1/tagged', {'Authorization': 'Bearer ' + os.environ['GHOST']}), send('/v1/plain', {'Authorization': 'Bearer sk-real'}))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        tagged = next(s for s in SEEN if s["path"] == "/v1/tagged")
+        plain = next(s for s in SEEN if s["path"] == "/v1/plain")
+        self.assertRegex(tagged["hook"], r"^python/")
+        self.assertIsNone(tagged["from"])
+        self.assertEqual(tagged["body"], "{}")
+        self.assertIsNone(plain["hook"])
+
+    @unittest.skipUnless(has("requests") and has("httpx"), "requests and httpx are not installed")
+    def test_names_the_app_through_requests_and_httpx(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, os, httpx, requests
+            api = os.environ['VALLKEY_API']
+            headers = {'Authorization': 'Bearer ' + os.environ['GHOST']}
+            print(requests.get(api + '/v1/via-requests', headers=headers).json()['from'], httpx.get(api + '/v1/via-httpx', headers=headers).json()['from'])
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        for path in ("/v1/via-requests", "/v1/via-httpx"):
+            entry = next(s for s in SEEN if s["path"] == path)
+            self.assertRegex(entry["hook"], r"^python/")
+            self.assertIsNone(entry["from"])
+
+    @unittest.skipUnless(has("urllib3") and has("aiohttp"), "urllib3 and aiohttp are not installed")
+    def test_names_the_app_through_urllib3_and_aiohttp(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, asyncio, os, aiohttp, urllib3
+            api = os.environ['VALLKEY_API']
+            headers = {'Authorization': 'Bearer ' + os.environ['GHOST']}
+            async def main():
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(api + '/v1/via-aiohttp', headers=headers) as r:
+                        return (await r.json())['from']
+            print(urllib3.PoolManager().request('GET', api + '/v1/via-urllib3', headers=headers).json()['from'], asyncio.run(main()))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        for path in ("/v1/via-urllib3", "/v1/via-aiohttp"):
+            entry = next(s for s in SEEN if s["path"] == path)
+            self.assertRegex(entry["hook"], r"^python/")
+            self.assertIsNone(entry["from"])
+
     # Installing the package puts vallkey_auto.pth in site-packages; site.addsitedir runs
     # it the same way Python does at start, before any of the app's code.
     INSTALLED = """

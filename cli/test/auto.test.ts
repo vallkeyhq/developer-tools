@@ -280,6 +280,40 @@ describe('vallkey/auto', () => {
     assert.equal(last().from, null);
   });
 
+  it('names the app on ghost key requests already addressed to Vallkey, changing nothing else', async () => {
+    const r = await node(
+      `(async () => {
+      const g = process.env.GHOST;
+      const api = process.env.VALLKEY_API;
+      await fetch(api + '/v1/chat', { method: 'POST', headers: { authorization: 'Bearer ' + g }, body: '{"a":1}' });
+      await fetch(new Request(api + '/v1/request', { headers: { 'x-api-key': g } }));
+      await new Promise((resolve) => {
+        const u = new URL(api);
+        require('http').get({ hostname: u.hostname, port: u.port, path: '/v1/node', headers: ['authorization', 'Bearer ' + g] }, (r) => { r.resume(); r.on('end', resolve); });
+      });
+      await new Promise((resolve) => require('http').get(api + '/v1/url', { headers: { authorization: 'Bearer ' + g } }, (r) => { r.resume(); r.on('end', resolve); }));
+      await fetch(api + '/v1/plain');
+    })()`,
+      env,
+    );
+    assert.equal(r.code, 0, r.err);
+    const [chat, request, nodeCall, url, plain] = seen.slice(-5);
+    for (const [entry, path] of [
+      [chat, '/v1/chat'],
+      [request, '/v1/request'],
+      [nodeCall, '/v1/node'],
+      [url, '/v1/url'],
+    ]) {
+      assert.equal(entry.server, 'vallkey');
+      assert.equal(entry.path, path);
+      assert.match(entry.hook, /^node\//);
+      assert.equal(entry.from, null);
+    }
+    assert.equal(chat.body, '{"a":1}');
+    assert.equal(nodeCall.auth, `Bearer ${GHOST}`);
+    assert.equal(plain.hook, null);
+  });
+
   it('preserves cancellation and streaming request bodies when headers identify the credential', async () => {
     const r = await node(
       `(async () => {

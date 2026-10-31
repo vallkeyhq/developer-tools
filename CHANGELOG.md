@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Node.js and Python hooks now also name the app on ghost-key requests already addressed to Vallkey by an SDK's address setting, so one app appears as one place in `status` and the dashboard. Other runtimes do not do this yet.
 - CLI: `connect` sets the project up instead of only printing steps. It installs the package (for Python, into the project's virtual environment and `requirements.txt`) and edits the start script, asking before each change. `--print`, or no terminal without `--yes`, only shows the steps. `hook` remains as its former name.
 - CLI: `init` offers to run `connect` straight away, and its one-line SDK changes follow the project's language instead of always showing Node.js.
 - CLI: `verify` with no arguments waits for requests with the project's ghost keys and shows each one as it arrives, so no request ID needs to be copied from a response.

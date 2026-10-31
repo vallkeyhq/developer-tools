@@ -1,4 +1,10 @@
-import type { ClientRequest, IncomingHttpHeaders, IncomingMessage, RequestOptions } from 'node:http';
+import type {
+  ClientRequest,
+  IncomingHttpHeaders,
+  IncomingMessage,
+  OutgoingHttpHeaders,
+  RequestOptions,
+} from 'node:http';
 import type { RequestOptions as HttpsOptions } from 'node:https';
 type Protocol = 'http:' | 'https:';
 type Target = { protocol: string; hostname: string; port: string; host: string };
@@ -209,12 +215,23 @@ function patchFetch() {
     try {
       const isRequest = typeof Request !== 'undefined' && input instanceof Request;
       const url = new URL(isRequest ? input.url : String(input instanceof URL ? input.href : input));
+      const headers =
+        init && init.headers !== undefined ? init.headers : isRequest ? input.headers : undefined;
+      // Already addressed to Vallkey by an SDK's address setting: say which app it is, so
+      // one app is one place on the dashboard however each SDK reaches Vallkey.
+      if (
+        (url.protocol === 'https:' || url.protocol === 'http:') &&
+        isVallkey(url.hostname, url.port, url.protocol) &&
+        hasGhost(url, headers, init && init.body)
+      ) {
+        const tagged = new Headers(headers);
+        tagged.set('x-vallkey-hook', hookValue());
+        return original.call(this, input, { ...init, headers: tagged });
+      }
       if (
         (url.protocol === 'https:' || url.protocol === 'http:') &&
         !isVallkey(url.hostname, url.port, url.protocol)
       ) {
-        const headers =
-          init && init.headers !== undefined ? init.headers : isRequest ? input.headers : undefined;
         // init.headers replaces Request headers; discarded headers must not cause routing.
         if (
           hasGhost(url, headers, init && init.body) ||
@@ -353,6 +370,21 @@ function patchNode() {
           const o = originals[t.protocol === 'http:' ? 'http:' : 'https:'];
           const send = o.request as (options: RequestOptions, callback?: NodeCallback) => ClientRequest;
           return send.call(o.mod, next, cb);
+        }
+        // Already addressed to Vallkey: only say which app it is (see patchFetch).
+        if (
+          isVallkey(hostname, port, protocol) &&
+          (hasGhost({ search }, options.headers) || GHOST.test(String(credentials)))
+        ) {
+          const raw = options.headers ?? {};
+          const headers: OutgoingHttpHeaders = {};
+          if (Array.isArray(raw)) for (let n = 0; n + 1 < raw.length; n += 2) headers[raw[n]] = raw[n + 1];
+          else Object.assign(headers, raw);
+          headers['x-vallkey-hook'] = hookValue();
+          const tagged = { ...options, headers };
+          const o = originals[defaultProtocol];
+          const send = o.request as (...args: NodeArguments) => ClientRequest;
+          return url ? send.call(o.mod, url, tagged, cb) : send.call(o.mod, tagged, cb);
         }
       } catch {
         if (protectedRequest)
