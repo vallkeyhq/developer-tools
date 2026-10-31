@@ -18,11 +18,27 @@ const INSTALLED = Symbol.for('vallkey.auto');
 const env = (name: string) => (typeof process !== 'undefined' && process.env ? process.env[name] : undefined);
 
 let configuredTarget: Target | undefined;
+let configuredFrom: string | undefined;
+// Read on every request, as the other hooks do: dotenv and similar load .env after this
+// file starts, so a custom domain set there would otherwise be ignored.
 function target() {
-  if (configuredTarget) return configuredTarget;
+  const raw = env('VALLKEY_API') || 'https://api.vallkey.com';
+  if (configuredTarget && raw === configuredFrom) return configuredTarget;
+  configuredFrom = raw;
+  try {
+    configuredTarget = parseTarget(raw);
+  } catch (error) {
+    // At startup this stops the app; later, one bad value must not break every request.
+    if (!configuredTarget) throw error;
+    console.error('Vallkey: VALLKEY_API changed to an invalid value and was ignored.');
+  }
+  return configuredTarget;
+}
+
+function parseTarget(raw: string): Target {
   let url;
   try {
-    url = new URL(env('VALLKEY_API') || 'https://api.vallkey.com');
+    url = new URL(raw);
   } catch {
     throw new Error('Vallkey: VALLKEY_API must be an HTTPS origin.');
   }
@@ -39,8 +55,7 @@ function target() {
       'Vallkey: VALLKEY_API must be an HTTPS origin without credentials, path, query or fragment (HTTP is allowed for loopback tests).',
     );
   }
-  configuredTarget = { protocol: url.protocol, hostname: url.hostname, port: url.port, host: url.host };
-  return configuredTarget;
+  return { protocol: url.protocol, hostname: url.hostname, port: url.port, host: url.host };
 }
 
 // Keep platform precedence consistent across runtime hooks.

@@ -236,6 +236,7 @@ do_rewrite(finch, [Req | Rest]) ->
     Query = maps:get(query, Req, nil),
     case decide(atom_to_binary(Scheme, utf8), Host, Port, Query, Headers, []) of
         none -> [Req | Rest];
+        tag -> [Req#{headers := [{?WHO_HEADER, who()} | Headers]} | Rest];
         {TScheme, THost, TPort, From} ->
             [Req#{scheme := binary_to_atom(TScheme, utf8), host := THost, port := TPort,
                   headers := [{?HOOK_HEADER, From}, {?WHO_HEADER, who()} | drop_host(Headers)]} | Rest]
@@ -246,6 +247,7 @@ do_rewrite(hackney, [Method, Url, Headers | More]) when is_binary(Url); is_list(
     Extra = case proplists:get_value(basic_auth, Options) of {_, P} -> [P]; _ -> [] end,
     case decide_url(Url, Headers, Extra) of
         none -> [Method, Url, Headers | More];
+        tag -> [Method, Url, [{?WHO_HEADER, who()} | Headers] | More];
         {NewUrl, From} -> [Method, NewUrl, [{?HOOK_HEADER, From}, {?WHO_HEADER, who()} | drop_host(Headers)] | More]
     end;
 %% httpc: request(Method, {URL, Headers[, ContentType, Body]}, HttpOptions, Options[, Profile]).
@@ -253,6 +255,12 @@ do_rewrite(httpc, [Method, Request | More]) when is_tuple(Request) ->
     [Url, Headers | Tail] = tuple_to_list(Request),
     case decide_url(Url, Headers, []) of
         none -> [Method, Request | More];
+        tag ->
+            Who = case is_list(Url) of
+                true -> {"x-vallkey-hook", binary_to_list(who())};
+                false -> {?WHO_HEADER, who()}
+            end,
+            [Method, list_to_tuple([Url, [Who | Headers] | Tail]) | More];
         {NewUrl, From} ->
             Notes = case is_list(Url) of
                 true -> [{"x-vallkey-host", binary_to_list(From)}, {"x-vallkey-hook", binary_to_list(who())}];
@@ -268,21 +276,29 @@ decide_url(Url, Headers, Extra) ->
     Host = to_bin(maps:get(host, U, "")),
     case decide(Scheme, Host, maps:get(port, U, undefined), maps:get(query, U, nil), Headers, Extra) of
         none -> none;
+        tag -> tag;
         {TScheme, THost, TPort, From} ->
             New = U#{scheme => same_type(Url, TScheme), host => same_type(Url, THost), port => TPort},
             {uri_string:recompose(New), From}
     end.
 
-%% {Scheme, Host, Port, the address it was for} on Vallkey, or none.
+%% {Scheme, Host, Port, the address it was for} on Vallkey, or none. A request already
+%% addressed to Vallkey by an SDK's address setting gives tag: it only says which app it
+%% is, so one app is one place on the dashboard however each SDK reaches Vallkey.
 decide(Scheme0, Host, Port0, Query, Headers, Extra) ->
     Scheme = string:lowercase(Scheme0),
     Default = default_port(Scheme),
     Port = case Port0 of P when is_integer(P) -> P; _ -> Default end,
     {TScheme, THost, TPort} = target(),
+    Addressed = string:lowercase(to_bin(Host)) =:= THost andalso Port =:= TPort,
     case (Scheme =:= <<"https">> orelse Scheme =:= <<"http">>)
-         andalso not (string:lowercase(to_bin(Host)) =:= THost andalso Port =:= TPort)
          andalso ghost(Query, Headers, Extra) of
         false -> none;
+        true when Addressed ->
+            case lists:any(fun({K, _}) -> string:lowercase(to_bin(K)) =:= ?WHO_HEADER; (_) -> false end, Headers) of
+                true -> none;
+                false -> tag
+            end;
         true ->
             From = case Port =:= Default of true -> to_bin(Host); false -> <<(to_bin(Host))/binary, ":", (integer_to_binary(Port))/binary>> end,
             debug("~s://~s -> ~s://~s", [Scheme, From, TScheme, THost]),

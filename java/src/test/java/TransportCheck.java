@@ -10,12 +10,14 @@ import java.util.List;
 public final class TransportCheck {
     private static int failures;
     private static final List<String> sources = new ArrayList<>();
+    private static final List<String> paths = new ArrayList<>();
 
     private static HttpServer serve(String name, int port) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/", exchange -> {
             synchronized (sources) {
                 sources.add(exchange.getRequestHeaders().getFirst("x-vallkey-host"));
+                paths.add(exchange.getRequestURI().getPath() + " " + exchange.getRequestHeaders().getFirst("x-vallkey-host") + " " + exchange.getRequestHeaders().getFirst("x-vallkey-hook"));
             }
             byte[] body = name.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
@@ -62,6 +64,40 @@ public final class TransportCheck {
                 check("Apache HttpClient 5 preserves unrelated traffic", plainBody.equals("provider"));
             }
             check("third-party clients retain original destinations", sources.stream().filter("provider.example.invalid"::equals).count() == 3);
+
+            // Already addressed to Vallkey: only the app's name is added. OkHttp's advice
+            // builds a request inside build(), so this also proves it does not recurse.
+            String api = System.getenv("VALLKEY_API");
+            try (okhttp3.Response response = okhttp.newCall(new okhttp3.Request.Builder().url(api + "/tagged-okhttp").header("Authorization", "Bearer " + ghost).build()).execute()) {
+                check("OkHttp stays on an address already at Vallkey", response.body().string().equals("gateway"));
+            }
+            try (okhttp3.Response response = okhttp.newCall(new okhttp3.Request.Builder().url(api + "/plain-okhttp").build()).execute()) {
+                check("OkHttp leaves requests without a ghost key alone", response.body().string().equals("gateway"));
+            }
+            try (var client = org.apache.http.impl.client.HttpClients.createDefault()) {
+                var request = new org.apache.http.client.methods.HttpGet(api + "/tagged-apache4");
+                request.setHeader("Authorization", "Bearer " + ghost);
+                try (var response = client.execute(request)) {
+                    check("Apache HttpClient 4 stays on an address already at Vallkey", org.apache.http.util.EntityUtils.toString(response.getEntity()).equals("gateway"));
+                }
+            }
+            try (var client = org.apache.hc.client5.http.impl.classic.HttpClients.createDefault()) {
+                var request = new org.apache.hc.client5.http.classic.methods.HttpGet(api + "/tagged-apache5");
+                request.setHeader("Authorization", "Bearer " + ghost);
+                check("Apache HttpClient 5 stays on an address already at Vallkey", client.execute(request, response -> org.apache.hc.core5.http.io.entity.EntityUtils.toString(response.getEntity())).equals("gateway"));
+            }
+            for (String path : List.of("/tagged-okhttp", "/tagged-apache4", "/tagged-apache5")) {
+                check(path + " says which app it is, and nothing else changes", paths.stream().anyMatch(p -> p.startsWith(path + " null java/0.1.0; ")));
+            }
+            check("/plain-okhttp is not named", paths.contains("/plain-okhttp null null"));
+
+            // Without this, OkHttp's advice re-enters its own build() until the stack overflows,
+            // which the advice swallows: the request still works, so only this can show it.
+            int port = URI.create(api).getPort();
+            var auth = java.util.Map.of("authorization", List.of("Bearer " + ghost));
+            var named = java.util.Map.of("authorization", List.of("Bearer " + ghost), "X-Vallkey-Hook", List.of("java/0.1.0"));
+            check("a request is named once", com.vallkey.agent.boot.Rewrite.addressed("http", "127.0.0.1", port, null, auth)
+                    && !com.vallkey.agent.boot.Rewrite.addressed("http", "127.0.0.1", port, null, named));
         } finally {
             gateway.stop(0);
             provider.stop(0);

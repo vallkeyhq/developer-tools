@@ -280,6 +280,31 @@ describe('vallkey/auto', () => {
     assert.equal(last().from, null);
   });
 
+  it('follows VALLKEY_API set after start, as dotenv does, and ignores a bad late value', async () => {
+    const seenLate = [];
+    const domain = await serve('domain', seenLate);
+    const late = `http://127.0.0.1:${domain.address().port}`;
+    try {
+      const r = await node(
+        `(async () => {
+        const send = async () => (await (await fetch('https://api.openai.com/v1/models', { headers: { authorization: 'Bearer ' + process.env.GHOST } })).json()).from;
+        const a = await send();
+        process.env.VALLKEY_API = '${late}';
+        const b = await send();
+        process.env.VALLKEY_API = 'not a url';
+        console.log(a, b, await send(), (await (await fetch('${providerUrl}/plain')).json()).from);
+      })()`,
+        env,
+      );
+      assert.equal(r.code, 0, r.err);
+      assert.equal(r.out, 'vallkey domain domain provider');
+      assert.match(r.err, /VALLKEY_API changed to an invalid value/);
+      assert.doesNotMatch(r.err, /not a url/);
+    } finally {
+      domain.close();
+    }
+  });
+
   it('names the app on ghost key requests already addressed to Vallkey, changing nothing else', async () => {
     const r = await node(
       `(async () => {

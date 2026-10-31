@@ -225,6 +225,17 @@ static void vk_setopt(zval *ch, zend_long opt, zval *value)
 	zval_ptr_dtor(&fname);
 }
 
+static int vk_has_who(vk_handle *h)
+{
+	zval *line;
+	if (Z_TYPE(h->headers) != IS_ARRAY) return 0;
+	ZEND_HASH_FOREACH_VAL(Z_ARRVAL(h->headers), line) {
+		ZVAL_DEREF(line);
+		if (Z_TYPE_P(line) == IS_STRING && strncasecmp(Z_STRVAL_P(line), VK_WHO_HEADER ":", sizeof(VK_WHO_HEADER)) == 0) return 1;
+	} ZEND_HASH_FOREACH_END();
+	return 0;
+}
+
 static zend_long vk_default_port(zend_string *scheme)
 {
 	return zend_string_equals_literal_ci(scheme, "https") ? 443 : 80;
@@ -250,7 +261,23 @@ static void vk_redirect(zval *ch)
 	if (!t || !t->scheme || !t->host) goto done;
 	port = u->port ? u->port : vk_default_port(u->scheme);
 	tport = t->port ? t->port : vk_default_port(t->scheme);
-	if (zend_string_equals_ci(u->host, t->host) && port == tport) goto done;
+	if (zend_string_equals_ci(u->host, t->host) && port == tport) {
+		/* Already addressed to Vallkey by an SDK's address setting: say which app it is, so
+		 * one app is one place on the dashboard however each SDK reaches Vallkey. */
+		if (vk_ghost_in(h, u) && !vk_has_who(h)) {
+			array_init(&value);
+			if (Z_TYPE(h->headers) == IS_ARRAY) {
+				ZEND_HASH_FOREACH_VAL(Z_ARRVAL(h->headers), line) {
+					ZVAL_DEREF(line);
+					if (Z_TYPE_P(line) == IS_STRING) add_next_index_str(&value, zend_string_copy(Z_STR_P(line)));
+				} ZEND_HASH_FOREACH_END();
+			}
+			add_next_index_str(&value, zend_strpprintf(0, VK_WHO_HEADER ": %s", vk_who));
+			vk_setopt(ch, VK_CURLOPT_HTTPHEADER, &value);
+			zval_ptr_dtor(&value);
+		}
+		goto done;
+	}
 	if (!vk_ghost_in(h, u)) goto done;
 
 	smart_str_append(&from, u->host);

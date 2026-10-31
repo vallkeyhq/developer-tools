@@ -228,6 +228,26 @@ class AutoTest(unittest.TestCase):
             self.assertRegex(entry["hook"], r"^python/")
             self.assertIsNone(entry["from"])
 
+    @unittest.skipUnless(has("botocore"), "botocore is not installed")
+    def test_botocore_goes_to_vallkey_and_names_the_app_when_already_there(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, json, os
+            from botocore.awsrequest import AWSRequest
+            from botocore.httpsession import URLLib3Session
+            headers = {'Authorization': 'AWS4-HMAC-SHA256 Credential=' + os.environ['GHOST'] + '/20261031/us-east-1/s3/aws4_request'}
+            send = lambda url: json.loads(URLLib3Session().send(AWSRequest(method='GET', url=url, headers=headers).prepare()).content)['from']
+            print(send('https://s3.us-east-1.amazonaws.com/bucket/moved'), send(os.environ['VALLKEY_API'] + '/bucket/tagged'))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        moved = next(s for s in SEEN if s["path"] == "/bucket/moved")
+        tagged = next(s for s in SEEN if s["path"] == "/bucket/tagged")
+        self.assertEqual(moved["from"], "s3.us-east-1.amazonaws.com")
+        self.assertRegex(moved["hook"], r"^python/")
+        self.assertIsNone(tagged["from"])
+        self.assertRegex(tagged["hook"], r"^python/")
+
     @unittest.skipUnless(has("urllib3") and has("aiohttp"), "urllib3 and aiohttp are not installed")
     def test_names_the_app_through_urllib3_and_aiohttp(self):
         out, _ = self.run_py(

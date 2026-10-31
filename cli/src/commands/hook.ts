@@ -114,11 +114,15 @@ function installCommand(lang: string, names: Set<string>) {
   return LANGUAGES[lang].install?.[0] ?? null;
 }
 
+// vallkey on a line of requirements.txt, and not vallkey-something.
+const LISTED = /^\s*vallkey(?![\w-])/im;
+
 // The project's own virtual environment, where pip has to install for the app to see it.
 async function venvPython(cwd: string) {
+  // An activated environment is the one the person is using, wherever it lives.
   const dirs = [process.env.VIRTUAL_ENV, ...['.venv', 'venv', 'env'].map((d) => join(cwd, d))];
   for (const dir of dirs) {
-    if (!dir || !resolve(dir).startsWith(resolve(cwd))) continue;
+    if (!dir) continue;
     for (const bin of [join(dir, 'bin', 'python'), join(dir, 'Scripts', 'python.exe')])
       if (await exists(bin)) return bin;
   }
@@ -138,9 +142,9 @@ export async function installed(lang: string, cwd: string, names: Set<string>) {
   if (lang === 'python') {
     // Listed for deploys, and present in the local environment when there is one.
     const listed = names.has('requirements.txt')
-      ? /^\s*vallkey\b/im.test(await readFile(join(cwd, 'requirements.txt'), 'utf8'))
+      ? LISTED.test(await readFile(join(cwd, 'requirements.txt'), 'utf8'))
       : names.has('pyproject.toml') &&
-        /["']vallkey\b/.test(await readFile(join(cwd, 'pyproject.toml'), 'utf8'));
+        /["']vallkey(?![\w-])/.test(await readFile(join(cwd, 'pyproject.toml'), 'utf8'));
     const py = await venvPython(cwd);
     if (!py) return listed;
     try {
@@ -200,7 +204,7 @@ async function installStep(lang: string, cwd: string, names: Set<string>, flags:
     if (pip) {
       if (names.has('requirements.txt')) {
         const text = await readFile(join(cwd, 'requirements.txt'), 'utf8');
-        if (!/^\s*vallkey\b/im.test(text))
+        if (!LISTED.test(text))
           await appendFile(
             join(cwd, 'requirements.txt'),
             `${text && !text.endsWith('\n') ? '\n' : ''}vallkey\n`,
@@ -212,7 +216,10 @@ async function installStep(lang: string, cwd: string, names: Set<string>, flags:
     throw new CliError(`Installing the vallkey package failed. Run it yourself: ${command}`);
   }
   out(`  1. ${green('✓')} Installed the vallkey package`);
-  if (pip && !py)
+  // pip cannot edit pyproject.toml, and a deploy would not have the package without it.
+  if (pip && !names.has('requirements.txt'))
+    out(`     ${yellow('!')} Add vallkey to your project dependencies too, so deployed apps get it.`);
+  if (pip && !py && names.has('requirements.txt'))
     out(
       dim('     Added to requirements.txt. Install it where the app runs: pip install -r requirements.txt'),
     );

@@ -125,12 +125,59 @@ test('connect adds vallkey to requirements.txt and installs it in the project en
   }
 });
 
+test('connect finds an activated environment outside the project, and not a look-alike name', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vallkey-venv-'));
+  const cwd = join(root, 'app');
+  const outside = join(root, 'envs', 'app');
+  try {
+    await mkdir(cwd);
+    await writeFile(join(cwd, 'requirements.txt'), 'vallkey-tools\n');
+    const tools = await fakeTools(root);
+    await mkdir(join(outside, 'bin'), { recursive: true });
+    await writeFile(join(outside, 'bin', 'python'), await readFile(join(root, '.fake-bin', 'npm'), 'utf8'));
+    await chmod(join(outside, 'bin', 'python'), 0o755);
+    const r = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: outside },
+    });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'vallkey-tools\nvallkey\n');
+    assert.match(await tools.log(), /python -m pip install vallkey/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('connect says when a pyproject.toml project still needs the dependency added', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-pyproject-'));
+  try {
+    await writeFile(join(cwd, 'pyproject.toml'), '[project]\nname = "app"\n');
+    const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    await writeFile(
+      join(cwd, '.venv', 'bin', 'python'),
+      await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'),
+    );
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    const r = await run(['connect', 'python', '--yes'], { cwd, env: { PATH: tools.path, VIRTUAL_ENV: '' } });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /Add vallkey to your project dependencies too/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('verify with no arguments waits for requests with the project ghost keys', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'vallkey-watch-'));
   const ghost = `gk_openai_${key}_${'B'.repeat(43)}`;
   let activity = [];
+  let denied = false;
   const server = createServer((req, res) => {
     assert.equal(req.headers.authorization, 'Bearer test-management');
+    if (denied)
+      return res
+        .writeHead(401, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ error: { code: 'unauthorized', message: 'invalid token' } }));
     const url = new URL(req.url, 'http://localhost');
     assert.equal(url.pathname, `/_guard/v1/keys/${key}/activity`);
     assert.ok(Number(url.searchParams.get('from')) > 0);
@@ -171,6 +218,13 @@ test('verify with no arguments waits for requests with the project ghost keys', 
     );
     await rm(join(cwd, '.env'));
     assert.match((await run(['verify'], { cwd, env })).stderr, /Run vallkey init first/);
+    await writeFile(join(cwd, '.env'), `OPENAI_API_KEY=${ghost}\n`);
+    denied = true;
+    const started = Date.now();
+    const refused = await run(['verify', '--timeout', '30'], { cwd, env });
+    assert.equal(refused.code, 1);
+    assert.ok(Date.now() - started < 10_000, 'a refused token does not wait for the timeout');
+    assert.doesNotMatch(refused.stdout, /No request reached Vallkey/);
   } finally {
     server.close();
     await rm(cwd, { recursive: true, force: true });

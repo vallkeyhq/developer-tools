@@ -23,7 +23,10 @@ public final class Apache5Advice {
             pairs.add(h.getValue());
         }
         String[] t = Rewrite.decide(scheme, host, port, q < 0 ? null : path.substring(q + 1), pairs);
-        if (t == null) return;
+        if (t == null) {
+            if (Rewrite.addressed(scheme, host, port, q < 0 ? null : path.substring(q + 1), pairs)) request.setHeader(Rewrite.WHO_HEADER, Rewrite.who());
+            return;
+        }
         int p = Integer.parseInt(t[2]);
         request.setScheme(t[0]);
         request.setAuthority(new org.apache.hc.core5.net.URIAuthority(t[1], p));

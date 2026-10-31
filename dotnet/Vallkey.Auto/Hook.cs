@@ -105,7 +105,13 @@ namespace Vallkey.Auto
             var uri = request.RequestUri;
             if (uri is null || !uri.IsAbsoluteUri || (uri.Scheme != "https" && uri.Scheme != "http")) return;
             var t = Current();
-            if (string.Equals(uri.Host, t.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == t.Port) return;
+            if (string.Equals(uri.Host, t.Host, StringComparison.OrdinalIgnoreCase) && uri.Port == t.Port)
+            {
+                // Already addressed to Vallkey by an SDK's address setting: say which app it is,
+                // so one app is one place on the dashboard however each SDK reaches Vallkey.
+                if (!request.Headers.Contains(WhoHeader) && HasGhost(request, uri)) request.Headers.TryAddWithoutValidation(WhoHeader, Who.Value);
+                return;
+            }
             if (!HasGhost(request, uri)) return;
             var from = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
             if (Environment.GetEnvironmentVariable("VALLKEY_DEBUG") == "1") Console.Error.WriteLine($"[vallkey] {uri.Scheme}://{from} -> {t.Scheme}://{t.Authority}");

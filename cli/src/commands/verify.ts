@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { call, requireToken } from '../api.js';
+import { ApiError, call, requireToken } from '../api.js';
 import { gatewayOrigin, resolveAuth } from '../config.js';
 import { parseEnv } from '../dotenv.js';
 import type { Activity, Flags } from '../types.js';
@@ -58,7 +58,13 @@ async function watch(flags: Flags) {
         auth,
         'GET',
         `/keys/${id}/activity?${new URLSearchParams({ from: String(from), limit: '10' })}`,
-      ).catch(() => ({ data: { activity: [] as Activity[] } }));
+      ).catch((error) => {
+        // A signed-out token or another account's key will never succeed, so say so now.
+        // A brief network or server problem should not stop the wait.
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429)
+          throw error;
+        return { data: { activity: [] as Activity[] } };
+      });
       // A settled success wins; otherwise the latest settled request says what went wrong.
       const settled = (data.activity ?? []).filter(
         (e) => e.at >= from && (e.outcome === 'denied' || (e.status !== null && e.status !== undefined)),

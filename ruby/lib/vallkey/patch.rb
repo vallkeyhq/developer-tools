@@ -137,6 +137,7 @@ module Vallkey
       def request(req, body = nil, &block)
         moved = Vallkey::Patch.installed && Vallkey::Patch.redirect?(self, req, body)
         unless moved
+          Vallkey::Patch.tag(self, req, body) if Vallkey::Patch.installed
           if @vallkey_deferred
             @vallkey_deferred = false
             connect
@@ -181,6 +182,19 @@ module Vallkey
         [t, from]
       rescue StandardError
         false # anything unusual goes out as it was
+      end
+
+      # Already addressed to Vallkey by an SDK's address setting: say which app it is, so
+      # one app is one place on the dashboard however each SDK reaches Vallkey.
+      def tag(http, req, body)
+        t = target
+        return unless http.address == t.host && http.port == t.port
+        return if req[WHO_HEADER]
+        headers = []
+        req.each_header { |name, value| headers << [name, value] }
+        req[WHO_HEADER] = who if ghost?(req.path, headers, body || req.body)
+      rescue StandardError
+        nil # anything unusual goes out as it was
       end
     end
   end

@@ -146,6 +146,25 @@ class AutoTest < Minitest::Test
     assert_equal "provider", ruby(code, "VALLKEY_AUTO" => "0")[0]
   end
 
+  def test_names_the_app_on_requests_already_addressed_to_vallkey
+    out, = ruby(<<~RUBY)
+      require "net/http"
+      require "json"
+      uri = URI(ENV["VALLKEY_API"])
+      http = Net::HTTP.new(uri.host, uri.port)
+      a = http.request(Net::HTTP::Post.new("/v1/tagged", "Authorization" => "Bearer \#{ENV['GHOST']}"), "{}")
+      b = http.request(Net::HTTP::Get.new("/v1/plain"))
+      puts [a, b].map { |r| JSON.parse(r.body)["from"] }.join(" ")
+    RUBY
+    assert_equal "vallkey vallkey", out
+    tagged = @vallkey.last
+    plain = @vallkey.last
+    assert_match(%r{\Aruby/}, tagged["headers"]["x-vallkey-hook"])
+    assert_nil tagged["headers"]["x-vallkey-host"]
+    assert_equal ["POST", "/v1/tagged", "{}"], [tagged["method"], tagged["path"], tagged["body"]]
+    assert_nil plain["headers"]["x-vallkey-hook"]
+  end
+
   def test_says_what_it_does_without_showing_the_key
     _, err = ruby(<<~RUBY, "VALLKEY_DEBUG" => "1")
       require "net/http"
