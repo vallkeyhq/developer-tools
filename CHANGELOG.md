@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Python: installing the package turns auto-connect on, with no `VALLKEY_AUTO=1` or import, like the other runtimes. `VALLKEY_AUTO=0` turns it off and is checked on each request, so it also works from a `.env` file loaded after start. The CLI now warns that the released 0.3 package reads `VALLKEY_AUTO=1` before `.env` is loaded.
+
 - Migrate maintained JavaScript tooling to strict TypeScript with generated runtime builds and declarations.
 - Preserve Node.js 18, CommonJS preload and ESM import compatibility.
 - Validate API and JSON-RPC envelopes and reject MCP path escapes through symlinks.

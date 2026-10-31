@@ -10,17 +10,7 @@ Vallkey gives you ghost keys: stand-in API keys that only work within your rules
 pip install vallkey
 ```
 
-Then either set an environment variable, with no change to your code:
-
-```sh
-VALLKEY_AUTO=1 python app.py
-```
-
-or import it once, anywhere in your code:
-
-```python
-import vallkey.auto
-```
+That is all: once it is installed in the app's environment, it turns on when Python starts, with no import and no variable. Requests without a ghost key are left alone. `VALLKEY_AUTO=0` turns it off, also from a `.env` file your app loads, since each request checks it.
 
 Put your ghost key where the real key was (for example `OPENAI_API_KEY=gk_openai_...`) and use the SDK as usual:
 
@@ -34,7 +24,7 @@ It covers httpx and httpx2 (OpenAI, Anthropic and most new SDKs), requests (Stri
 
 | Variable          |                                                      |
 | ----------------- | ---------------------------------------------------- |
-| `VALLKEY_AUTO=1`  | Turns it on when Python starts, without an import    |
+| `VALLKEY_AUTO=0`  | Turns it off                                         |
 | `VALLKEY_API`     | The Vallkey server, if not `https://api.vallkey.com` |
 | `VALLKEY_DEBUG=1` | Logs each request sent to Vallkey (never the key)    |
 

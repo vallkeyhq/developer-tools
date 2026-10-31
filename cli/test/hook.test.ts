@@ -277,7 +277,7 @@ describe('vallkey hook', () => {
     const node = await run(['hook'], { cwd: await make({ 'package.json': '{}', 'pnpm-lock.yaml': '' }) });
     assert.match(node.stdout, /pnpm add vallkey[\s\S]*NODE_OPTIONS='--require vallkey\/auto'/);
     const python = await run(['hook'], { cwd: await make({ 'uv.lock': '', 'pyproject.toml': '' }) });
-    assert.match(python.stdout, /uv add vallkey[\s\S]*VALLKEY_AUTO=1/);
+    assert.match(python.stdout, /uv add vallkey[\s\S]*VALLKEY_AUTO=1[\s\S]*Not in a \.env file/);
     const ruby = await run(['hook'], { cwd: await make({ Gemfile: '' }) });
     assert.match(ruby.stdout, /bundle add vallkey[\s\S]*RUBYOPT=-rvallkey\/auto/);
   });

@@ -62,6 +62,10 @@ def _in_value(value):
 
 
 def _has_ghost(query, headers, body=None):
+    # Read on every request, so VALLKEY_AUTO=0 from a .env file loaded after Python
+    # started still turns it off.
+    if os.environ.get("VALLKEY_AUTO") == "0":
+        return False
     if query and GHOST.search(unquote(query if isinstance(query, str) else query.decode("latin-1"))):
         return True
     for _, value in headers:

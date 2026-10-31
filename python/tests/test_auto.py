@@ -195,6 +195,36 @@ class AutoTest(unittest.TestCase):
         self.assertEqual(out, "vallkey provider")
         self.assertTrue(any(s["path"] == "/emails" and s["server"] == "vallkey" for s in SEEN))
 
+    # Installing the package puts vallkey_auto.pth in site-packages; site.addsitedir runs
+    # it the same way Python does at start, before any of the app's code.
+    INSTALLED = """
+        import json, os, site, urllib.request
+        site.addsitedir(os.environ['PYTHONPATH'])
+        ghost = lambda: urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+        plain = lambda: urllib.request.Request('%s/plain', headers={'Authorization': 'Bearer sk-real'})
+        send = lambda req: json.load(urllib.request.urlopen(req))['from']
+        """
+
+    def installed(self, tail):
+        return textwrap.dedent(self.INSTALLED % (self.provider_url, self.provider_url)) + tail
+
+    def test_installed_package_is_on_with_no_import_or_variable(self):
+        out, _ = self.run_py(self.installed("print(send(ghost()), send(plain()))\n"))
+        self.assertEqual(out, "vallkey provider")
+
+    def test_vallkey_auto_0_turns_it_off_at_start(self):
+        out, _ = self.run_py(self.installed("print(send(ghost()))\n"), VALLKEY_AUTO="0")
+        self.assertEqual(out, "provider")
+
+    def test_vallkey_auto_0_from_a_env_file_loaded_later_turns_it_off(self):
+        # python-dotenv and similar load .env after Python started, after the .pth ran.
+        out, _ = self.run_py(
+            self.installed(
+                "a = send(ghost())\nos.environ['VALLKEY_AUTO'] = '0'\nb = send(ghost())\nos.environ['VALLKEY_AUTO'] = '1'\nprint(a, b, send(ghost()))\n"
+            )
+        )
+        self.assertEqual(out, "vallkey provider vallkey")
+
     def test_debug_log_never_shows_the_key_and_uninstall_undoes_it(self):
         out, err = self.run_py(
             """

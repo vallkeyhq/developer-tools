@@ -528,6 +528,10 @@ export async function hook(args: string[], flags: Flags) {
     if (env) {
       out(`  ${n++}. Set this in your app's environment (hosting dashboard, process manager or shell):`);
       for (const line of envLines(env)) out(`       ${cyan(line)}`);
+      // The installed vallkey 0.3 reads it when Python starts, before python-dotenv and
+      // similar load .env, so a value there is never seen.
+      if (lang === 'python')
+        out(dim('     Not in a .env file: Python reads it when it starts, before your app loads .env.'));
       // Variables that often hold other options already: add to them, do not replace them.
       if (
         Object.keys(env).some((k) =>
