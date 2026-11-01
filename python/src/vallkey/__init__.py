@@ -1,7 +1,7 @@
 """Vallkey for Python. Installing the package turns it on; VALLKEY_AUTO=0 turns it off."""
 
 __all__ = ["install", "uninstall"]
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 # Imported lazily: Python loads this package at every start (vallkey_auto.pth), and the

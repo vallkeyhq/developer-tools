@@ -1,6 +1,6 @@
 {application, vallkey,
  [{description, "Send any Elixir or Erlang SDK through Vallkey with no code changes"},
-  {vsn, "0.1.0"},
+  {vsn, "0.2.0"},
   {modules, [vallkey_auto]},
   {registered, []},
   {applications, [kernel, stdlib, compiler]},
