@@ -224,6 +224,75 @@ test('connect says when a pyproject.toml project still needs the dependency adde
   }
 });
 
+test('connect changes what the platform really runs, and doctor reports what it left', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-platform-'));
+  try {
+    await mkdir(join(cwd, 'node_modules', 'vallkey'), { recursive: true });
+    await writeFile(
+      join(cwd, 'node_modules', 'vallkey', 'package.json'),
+      '{"name":"vallkey","exports":{"./auto":"./auto.js"}}',
+    );
+    await writeFile(join(cwd, 'node_modules', 'vallkey', 'auto.js'), '');
+    await writeFile(join(cwd, 'package.json'), '{"scripts":{"start":"node app.js"}}');
+    const procfile = 'web: node app.js\n';
+    await writeFile(join(cwd, 'Procfile'), procfile);
+    await writeFile(join(cwd, 'Dockerfile'), 'FROM node:22\nCMD ["node", "app.js"]\n');
+    await writeFile(join(cwd, 'ecosystem.config.js'), 'module.exports = {}\n');
+    const doctor = JSON.parse((await run(['doctor', '--json'], { cwd })).stdout).checks.filter(
+      (c) => c.status === 'warning',
+    );
+    assert.deepEqual(doctor.length, 3);
+    assert.match(doctor[0].message, /Procfile starts your app without auto-connect/);
+    const shown = await run(['connect'], { cwd });
+    assert.match(shown.stdout, /web: node --require vallkey\/auto app\.js/);
+    assert.equal(await readFile(join(cwd, 'Procfile'), 'utf8'), procfile);
+    const done = await run(['connect', '--yes'], { cwd });
+    assert.equal(done.code, 1, 'pm2 still needs a hand edit');
+    assert.match(done.stdout, /node_args/);
+    assert.equal(await readFile(join(cwd, 'Procfile'), 'utf8'), 'web: node --require vallkey/auto app.js\n');
+    assert.equal(
+      await readFile(join(cwd, 'Dockerfile'), 'utf8'),
+      'FROM node:22\nCMD ["node","--require","vallkey/auto","app.js"]\n',
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect adds auto-connect to Vercel functions, and does it once', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-vercel-'));
+  try {
+    await mkdir(join(cwd, 'node_modules', 'vallkey'), { recursive: true });
+    await writeFile(
+      join(cwd, 'node_modules', 'vallkey', 'package.json'),
+      '{"name":"vallkey","exports":{"./auto":"./auto.js"}}',
+    );
+    await writeFile(join(cwd, 'node_modules', 'vallkey', 'auto.js'), '');
+    await writeFile(join(cwd, 'package.json'), '{}');
+    await writeFile(join(cwd, 'vercel.json'), '{}');
+    await mkdir(join(cwd, 'api', 'nested'), { recursive: true });
+    await writeFile(join(cwd, 'api', 'a.js'), "import s from 'stripe';\n");
+    await writeFile(join(cwd, 'api', 'nested', 'b.ts'), 'export default 1;\n');
+    await writeFile(join(cwd, 'api', '_helper.js'), 'module.exports = 1;\n');
+    const shown = await run(['connect'], { cwd });
+    assert.match(shown.stdout, /first line of each function/);
+    assert.equal(await readFile(join(cwd, 'api', 'a.js'), 'utf8'), "import s from 'stripe';\n");
+    const done = await run(['connect', '--yes'], { cwd });
+    assert.equal(done.code, 0, done.stdout + done.stderr);
+    assert.match(done.stdout, /Added auto-connect to 2 function file/);
+    assert.equal(
+      await readFile(join(cwd, 'api', 'a.js'), 'utf8'),
+      "import 'vallkey/auto';\nimport s from 'stripe';\n",
+    );
+    assert.equal(await readFile(join(cwd, 'api', '_helper.js'), 'utf8'), 'module.exports = 1;\n');
+    const again = await run(['connect', '--yes'], { cwd });
+    assert.match(again.stdout, /Each function loads auto-connect/);
+    assert.equal((await readFile(join(cwd, 'api', 'a.js'), 'utf8')).match(/vallkey\/auto/g).length, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('verify with no arguments waits for requests with the project ghost keys', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'vallkey-watch-'));
   const ghost = `gk_openai_${key}_${'B'.repeat(43)}`;

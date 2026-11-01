@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { detect, phpFile, withHook } from '../dist/src/commands/hook.js';
+import { detect, phpFile, startEdits, withHook, withHookLine } from '../dist/src/commands/hook.js';
 
 const BIN = new URL('../dist/bin/vallkey.js', import.meta.url).pathname;
 const MANIFEST = JSON.parse(await readFile(new URL('../dist/src/hooks.json', import.meta.url), 'utf8'));
@@ -301,6 +301,87 @@ describe('vallkey hook', () => {
       ['node app.js | pino-pretty', 'node', 'node --require vallkey/auto app.js | pino-pretty'],
     ])
       assert.equal(withHook(start, lang), expected);
+  });
+
+  it('finds what each platform really runs, and leaves what already works alone', async () => {
+    const edits = async (files, lang = 'node') => {
+      const cwd = await make(files);
+      return startEdits(cwd, new Set(Object.keys(files)), lang);
+    };
+    const after = async (files, lang) => (await edits(files, lang)).edits.map((e) => e.after);
+    assert.deepEqual(
+      await after({ Procfile: 'web: node app.js\nworker: node w.js\nrelease: node migrate.js\n' }),
+      ['web: node --require vallkey/auto app.js', 'worker: node --require vallkey/auto w.js'],
+    );
+    assert.deepEqual(await after({ Procfile: 'web: npm start\n' }), []);
+    assert.deepEqual(await after({ Procfile: 'web: npm run build && npm start\n' }), []);
+    assert.deepEqual(await after({ 'railway.json': '{"deploy":{"startCommand":"node app.js"}}' }), [
+      '"startCommand":"node --require vallkey/auto app.js"',
+    ]);
+    assert.deepEqual(await after({ 'railway.toml': '[deploy]\nstartCommand = "node app.js"\n' }), [
+      'startCommand = "node --require vallkey/auto app.js"',
+    ]);
+    assert.deepEqual(
+      await after({
+        'render.yaml':
+          'services:\n  - type: web\n    startCommand: node a.js\n  - type: worker\n    startCommand: "node b.js"\n',
+      }),
+      [
+        '    startCommand: node --require vallkey/auto a.js',
+        '    startCommand: "node --require vallkey/auto b.js"',
+      ],
+    );
+    assert.deepEqual(await after({ Dockerfile: 'FROM node:22\nCMD ["node", "app.js"]\n' }), [
+      'CMD ["node","--require","vallkey/auto","app.js"]',
+    ]);
+    assert.deepEqual(await after({ Dockerfile: 'FROM node:22\nCMD node app.js\n' }), [
+      'CMD node --require vallkey/auto app.js',
+    ]);
+    assert.deepEqual(await after({ Dockerfile: 'FROM oven/bun\nCMD ["bun", "run", "app.ts"]\n' }, 'bun'), [
+      'CMD ["bun","--preload","vallkey/auto","app.ts"]',
+    ]);
+    assert.deepEqual(await after({ Dockerfile: 'FROM node:22\nCMD ["npm", "start"]\n' }), []);
+    // Only the final stage runs, and an ENTRYPOINT outranks a CMD.
+    assert.deepEqual(
+      await after({
+        Dockerfile:
+          'FROM node:22 AS b\nCMD ["node", "build.js"]\nFROM node:22\nENTRYPOINT ["node", "s.js"]\nCMD ["--port=1"]\n',
+      }),
+      ['ENTRYPOINT ["node","--require","vallkey/auto","s.js"]'],
+    );
+    assert.match(
+      (await edits({ Dockerfile: 'FROM node:22\nCMD ["tsx", "app.ts"]\n' })).warnings[0],
+      /ENV NODE_OPTIONS/,
+    );
+    assert.match((await edits({ 'ecosystem.config.js': 'module.exports = {}' })).warnings[0], /node_args/);
+    assert.deepEqual(await edits({ Procfile: 'web: node --require vallkey/auto app.js\n' }), {
+      edits: [],
+      warnings: [],
+    });
+    assert.deepEqual(await after({ Procfile: 'web: bundle exec ruby app.rb\n' }, 'ruby'), [
+      'web: bundle exec ruby -rvallkey/auto app.rb',
+    ]);
+  });
+
+  it('adds the hook line where it stays valid in each kind of function file', () => {
+    assert.equal(
+      withHookLine('a.js', "const s = require('stripe');\n"),
+      "require('vallkey/auto');\nconst s = require('stripe');\n",
+    );
+    assert.equal(
+      withHookLine('a.js', "import s from 'stripe';\n"),
+      "import 'vallkey/auto';\nimport s from 'stripe';\n",
+    );
+    assert.equal(withHookLine('a.ts', 'export default 1;\n'), "import 'vallkey/auto';\nexport default 1;\n");
+    assert.equal(
+      withHookLine('a.js', "'use strict';\nmodule.exports = 1;\n"),
+      "'use strict';\nrequire('vallkey/auto');\nmodule.exports = 1;\n",
+    );
+    assert.equal(
+      withHookLine('a.js', '#!/usr/bin/env node\nx();\n'),
+      "#!/usr/bin/env node\nrequire('vallkey/auto');\nx();\n",
+    );
+    assert.equal(withHookLine('a.rb', 'puts 1\n'), 'require "vallkey/auto"\nputs 1\n');
   });
 
   it('says plainly when a language cannot be changed at runtime', async () => {

@@ -98,10 +98,147 @@ export function withHook(start: string, lang: string) {
   const at = Math.max(start.lastIndexOf('&&') + 1, start.lastIndexOf(';'));
   const head = at > 0 ? start.slice(0, at + 1).trimEnd() + ' ' : '';
   const last = start.slice(head.length).trimStart();
+  if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?start\b/.test(last)) return start; // the start script has it
   if (/^node\s/.test(last)) return `${head}${last.replace(/^node\s+/, 'node --require vallkey/auto ')}`;
   if (/^bun\s/.test(last))
     return `${head}${last.replace(/^bun\s+(?:run\s+)?/, 'bun --preload vallkey/auto ')}`;
   return `${head}${lang === 'bun' ? "BUN_OPTIONS='--preload vallkey/auto'" : "NODE_OPTIONS='--require vallkey/auto'"} ${last}`;
+}
+
+const hookedCommand = (command: string, lang: string) => {
+  if (command.includes('vallkey/auto')) return command;
+  if (lang !== 'ruby') return withHook(command, lang);
+  return /\bruby\s/.test(command)
+    ? command.replace(/\bruby\s/, 'ruby -rvallkey/auto ')
+    : `RUBYOPT=-rvallkey/auto ${command}`;
+};
+
+interface StartEdit {
+  file: string;
+  before: string;
+  after: string;
+}
+
+// Platforms often ignore package.json: a Procfile, a Dockerfile or the platform's own file
+// says what really runs. A hook added only to the start script would then never load, while
+// everything looks connected, so each of these is found and changed too.
+export async function startEdits(cwd: string, names: Set<string>, lang: string) {
+  const edits: StartEdit[] = [];
+  const warnings: string[] = [];
+  const read = (file: string) => (names.has(file) ? readFile(join(cwd, file), 'utf8') : '');
+  const flag = lang === 'bun' ? ['--preload', 'vallkey/auto'] : ['--require', 'vallkey/auto'];
+
+  // Every process, not only web: a worker holds keys too. release runs once, at deploy.
+  for (const m of (await read('Procfile')).matchAll(/^(?!release:)([\w-]+):[ \t]*(.+?)[ \t]*$/gm)) {
+    const after = hookedCommand(m[2], lang);
+    if (after !== m[2]) edits.push({ file: 'Procfile', before: m[0], after: `${m[1]}: ${after}` });
+  }
+  if (lang !== 'ruby') {
+    const quoted = /("startCommand"\s*:\s*)("(?:[^"\\]|\\.)*")/.exec(await read('railway.json'));
+    if (quoted) {
+      const command: string = JSON.parse(quoted[2]);
+      const after = hookedCommand(command, lang);
+      if (after !== command)
+        edits.push({ file: 'railway.json', before: quoted[0], after: quoted[1] + JSON.stringify(after) });
+    }
+    const toml = /^([ \t]*startCommand[ \t]*=[ \t]*)(["'])(.+?)\2[ \t]*$/m.exec(await read('railway.toml'));
+    if (toml) {
+      const after = hookedCommand(toml[3], lang);
+      if (after !== toml[3])
+        edits.push({
+          file: 'railway.toml',
+          before: toml[0],
+          after: `${toml[1]}${toml[2]}${after}${toml[2]}`,
+        });
+    }
+    for (const m of (await read('render.yaml')).matchAll(
+      /^([ \t]*(?:- )?startCommand:[ \t]*)(["']?)(.+?)\2[ \t]*$/gm,
+    )) {
+      const after = hookedCommand(m[3], lang);
+      if (after !== m[3])
+        edits.push({ file: 'render.yaml', before: m[0], after: `${m[1]}${m[2]}${after}${m[2]}` });
+    }
+    // What runs is the last ENTRYPOINT, or else the last CMD, of the final stage.
+    const docker = (await read('Dockerfile')).split(/^(?=\s*FROM\s)/im).pop() ?? '';
+    const runs = [...docker.matchAll(/^[ \t]*(ENTRYPOINT|CMD)[ \t]+(.+?)[ \t]*$/gim)];
+    const run = runs.filter((m) => /entrypoint/i.test(m[1])).pop() ?? runs.pop();
+    if (run && !run[2].includes('vallkey/auto')) {
+      let list: unknown = null;
+      try {
+        list = JSON.parse(run[2]);
+      } catch {
+        /* shell form */
+      }
+      if (Array.isArray(list)) {
+        if (list[0] === 'node' || list[0] === 'bun') {
+          const runtime = list[0] === 'bun' ? ['--preload', 'vallkey/auto'] : ['--require', 'vallkey/auto'];
+          const rest = list[0] === 'bun' && list[1] === 'run' ? list.slice(2) : list.slice(1);
+          const after = run[0].replace(run[2], JSON.stringify([list[0], ...runtime, ...rest]));
+          edits.push({ file: 'Dockerfile', before: run[0], after });
+        } else if (!(list.length > 1 && /^(npm|pnpm|yarn|bun)$/.test(list[0]) && /start$/.test(list.at(-1))))
+          warnings.push(
+            `Your Dockerfile runs ${list[0]}. Add this before it: ENV ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}="${flag.join(' ')}"`,
+          );
+      } else {
+        const after = hookedCommand(run[2], lang);
+        if (after !== run[2])
+          edits.push({ file: 'Dockerfile', before: run[0], after: run[0].replace(run[2], after) });
+      }
+    }
+    for (const file of ['ecosystem.config.js', 'ecosystem.config.cjs'])
+      if (names.has(file) && !(await read(file)).includes('vallkey/auto'))
+        warnings.push(`In ${file}, add to each app: node_args: '${flag.join(' ')}'`);
+  }
+  return { edits, warnings };
+}
+
+// Shows each change, or with consent makes it. False when one is still to do.
+async function applyStartEdits(cwd: string, names: Set<string>, lang: string, flags: Flags) {
+  const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+  const { edits, warnings } = await startEdits(cwd, names, lang);
+  let done = true;
+  for (const edit of edits) {
+    if (preview) {
+      out(`     In ${edit.file}:`);
+      out(`       ${cyan(edit.after.trim())}`);
+    } else if (await confirm(`  Change ${edit.file} to: ${edit.after.trim()}`, { yes: flags.yes })) {
+      const text = await readFile(join(cwd, edit.file), 'utf8');
+      await writeFile(
+        join(cwd, edit.file),
+        text.replace(edit.before, () => edit.after),
+      );
+      out(`  ${green('✓')} Updated ${edit.file}`);
+    } else done = false;
+  }
+  for (const warning of warnings) out(`  ${yellow('!')} ${warning}`);
+  return done && !warnings.length;
+}
+
+// Vercel functions have no start command, so the hook is a line in each one. A line that
+// goes after a shebang and any directive, which must stay first to mean anything.
+const FUNCTION = /\.(?:js|mjs|cjs|ts|mts|cts|rb)$/;
+async function functionFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(
+    entries
+      .filter((e) => !e.name.startsWith('_') && !e.name.startsWith('.') && !/\.d\.ts$/.test(e.name))
+      .map(async (e) => {
+        if (e.isDirectory()) return functionFiles(join(dir, e.name));
+        return FUNCTION.test(e.name) ? [join(dir, e.name)] : [];
+      }),
+  );
+  return files.flat();
+}
+
+export function withHookLine(file: string, text: string) {
+  const esm = /\.(?:mjs|ts|mts)$/.test(file) || /^\s*(?:import|export)\s/m.test(text);
+  const line = file.endsWith('.rb')
+    ? 'require "vallkey/auto"'
+    : esm
+      ? "import 'vallkey/auto';"
+      : "require('vallkey/auto');";
+  const head = /^(?:#!.*\n)?(?:(['"])use \w+\1;?[ \t]*\r?\n)*/.exec(text)?.[0] ?? '';
+  return `${head}${line}\n${text.slice(head.length)}`;
 }
 
 async function packageJson(cwd: string): Promise<ProjectPackage | null> {
@@ -447,10 +584,30 @@ export async function hook(args: string[], flags: Flags) {
           ? 'require "vallkey/auto"'
           : `import 'vallkey/auto'   ${dim("// or require('vallkey/auto')")}`;
       if (!(await installStep(lang, cwd, names, flags))) status = 1;
-      out(
-        `  2. Make this the first line of each function${lang === 'ruby' ? ' (api/*.rb)' : ' (api/*.js, api/*.ts)'}:`,
+      const functions = (await functionFiles(join(cwd, 'api'))).filter((f) =>
+        lang === 'ruby' ? f.endsWith('.rb') : !f.endsWith('.rb'),
       );
-      out(`       ${cyan(line)}`);
+      const missing = [];
+      for (const file of functions)
+        if (!(await readFile(file, 'utf8')).includes('vallkey/auto')) missing.push(file);
+      const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+      if (functions.length && !missing.length) out(`  2. ${green('✓')} Each function loads auto-connect.`);
+      else if (
+        !preview &&
+        missing.length &&
+        (await confirm(`  Add auto-connect to the top of ${missing.length} function file(s) in api/?`, {
+          yes: flags.yes,
+        }))
+      ) {
+        for (const file of missing) await writeFile(file, withHookLine(file, await readFile(file, 'utf8')));
+        out(`  2. ${green('✓')} Added auto-connect to ${missing.length} function file(s)`);
+      } else {
+        if (!preview && missing.length) status = 1;
+        out(
+          `  2. Make this the first line of each function${lang === 'ruby' ? ' (api/*.rb)' : ' (api/*.js, api/*.ts)'}:`,
+        );
+        out(`       ${cyan(line)}`);
+      }
       out('  3. Redeploy.');
       out();
       detail('Not in Vercel variables: they also apply to the build, which then fails.');
@@ -494,10 +651,11 @@ export async function hook(args: string[], flags: Flags) {
       } else {
         status = 1;
       }
+      if (!(await applyStartEdits(cwd, names, lang, flags))) status = 1;
       out(`  3. Restart or redeploy the app.`);
       out();
       detail(
-        `Using Docker or your own server? Setting ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' where the app runs works too.`,
+        `Does your host run another command, from its dashboard for example? That one needs ${flag} too, or set ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' where the app runs. vallkey verify shows if it worked.`,
       );
       detail(
         'Not in Railway, Render, Heroku or Vercel variables: they also apply to the build, which then fails.',
@@ -513,16 +671,12 @@ export async function hook(args: string[], flags: Flags) {
         ? /^web:\s*(.+)$/m.exec(await readFile(join(cwd, 'Procfile'), 'utf8'))?.[1]?.trim()
         : null;
     if (web) {
-      const updated = web.includes('vallkey/auto')
-        ? web
-        : /\bruby\s/.test(web)
-          ? web.replace(/\bruby\s/, 'ruby -rvallkey/auto ')
-          : `RUBYOPT=-rvallkey/auto ${web}`;
       if (!(await installStep(lang, cwd, names, flags))) status = 1;
-      if (web === updated) out(`  2. ${green('✓')} Your Procfile already turns on auto-connect.`);
+      if (web.includes('vallkey/auto'))
+        out(`  2. ${green('✓')} Your Procfile already turns on auto-connect.`);
       else {
-        out('  2. Load it when your app starts. In your Procfile:');
-        out(`       ${cyan(`web: ${updated}`)}`);
+        out('  2. Load it when your app starts:');
+        if (!(await applyStartEdits(cwd, names, lang, flags))) status = 1;
       }
       out('  3. Restart or redeploy the app.');
       out();
@@ -653,6 +807,7 @@ export async function hook(args: string[], flags: Flags) {
       if (!(await installStep(lang, cwd, names, flags))) status = 1;
       n++;
     }
+    if ((lang === 'node' || lang === 'bun') && !(await applyStartEdits(cwd, names, lang, flags))) status = 1;
     if (env) {
       out(`  ${n++}. Set this in your app's environment (hosting dashboard, process manager or shell):`);
       for (const line of envLines(env)) out(`       ${cyan(line)}`);

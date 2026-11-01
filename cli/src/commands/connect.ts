@@ -18,7 +18,7 @@ import {
   tidyPath,
   warn,
 } from '../ui.js';
-import { detect, hook, installed } from './hook.js';
+import { detect, hook, installed, startEdits } from './hook.js';
 import { LANGUAGES as LANGUAGE_NAMES } from './status.js';
 
 const ADDRESS: Record<string, [string, string]> = {
@@ -213,6 +213,15 @@ export async function doctor(args: string[], flags: Flags) {
                 },
       );
     } else {
+      const lang = project.languages.includes('bun') ? 'bun' : 'node';
+      const { edits, warnings } = await startEdits(cwd, new Set(await readdir(cwd).catch(() => [])), lang);
+      for (const file of new Set(edits.map((e) => e.file)))
+        checks.push({
+          check: 'startup',
+          status: 'warning',
+          message: `${file} starts your app without auto-connect. Run vallkey connect`,
+        });
+      for (const message of warnings) checks.push({ check: 'startup', status: 'warning', message });
       checks.push({
         check: 'startup',
         status: 'info',
