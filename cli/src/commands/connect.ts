@@ -241,6 +241,14 @@ export async function doctor(args: string[], flags: Flags) {
               'The vallkey package is not in your Python dependencies, or not installed in the project environment. Run vallkey connect',
           },
     );
+    const { edits, warnings } = await startEdits(cwd, names, 'python');
+    for (const { file } of edits)
+      checks.push({
+        check: 'startup',
+        status: 'warning',
+        message: `${file} runs on AWS Lambda without auto-connect. Run vallkey connect`,
+      });
+    for (const message of warnings) checks.push({ check: 'startup', status: 'warning', message });
     checks.push({
       check: 'startup',
       status: 'info',

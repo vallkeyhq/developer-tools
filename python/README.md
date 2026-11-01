@@ -12,6 +12,14 @@ pip install vallkey
 
 That is all: once it is installed in the app's environment, it turns on when Python starts, with no import and no variable. Requests without a ghost key are left alone. `VALLKEY_AUTO=0` turns it off, also from a `.env` file your app loads, since each request checks it.
 
+**On AWS Lambda, add one line.** Lambda adds your code and layers to Python's path after Python has started, so the package cannot turn itself on there and the ghost key goes straight to the provider, which refuses it. Make this the first line of your handler file:
+
+```python
+import vallkey.auto
+```
+
+`npx vallkey connect` adds it for you in SAM and Serverless Framework projects.
+
 Put your ghost key where the real key was (for example `OPENAI_API_KEY=gk_openai_...`) and use the SDK as usual:
 
 ```python
