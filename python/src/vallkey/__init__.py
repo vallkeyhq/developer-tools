@@ -4,8 +4,8 @@ __all__ = ["install", "uninstall"]
 __version__ = "0.3.0"
 
 
-# Imported lazily: Python loads this package at every start (vallkey_auto.pth), which
-# only registers an import hook; supported clients are changed when the app imports them.
+# Imported lazily: Python loads this package at every start (vallkey_auto.pth), and the
+# patch module only loads when the app imports a supported client (see _startup).
 def install():
     """Start sending requests that carry a ghost key to Vallkey."""
     from vallkey._patch import install as _install

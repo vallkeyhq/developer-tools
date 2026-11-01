@@ -108,7 +108,7 @@ test('connect adds vallkey to requirements.txt and installs it in the project en
     await writeFile(join(cwd, 'requirements.txt'), 'stripe');
     const tools = await fakeTools(cwd);
     await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
-    // The fake Python answers "not installed" to the import check and succeeds at pip.
+    await mkdir(join(cwd, '.venv', 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
     await writeFile(
       join(cwd, '.venv', 'bin', 'python'),
       await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'),
@@ -117,7 +117,7 @@ test('connect adds vallkey to requirements.txt and installs it in the project en
     const r = await run(['connect', 'python', '--yes'], { cwd, env: { PATH: tools.path, VIRTUAL_ENV: '' } });
     assert.equal(r.code, 0, r.stdout + r.stderr);
     assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\nvallkey\n');
-    assert.match(await tools.log(), /python -c import vallkey\npython -m pip install vallkey\n/);
+    assert.equal(await tools.log(), 'python -m pip install vallkey\n');
     assert.match(r.stdout, /Installed the vallkey package/);
     assert.match(r.stdout, /Not in a \.env file/);
   } finally {
@@ -134,6 +134,7 @@ test('connect finds an activated environment outside the project, and not a look
     await writeFile(join(cwd, 'requirements.txt'), 'vallkey-tools\n');
     const tools = await fakeTools(root);
     await mkdir(join(outside, 'bin'), { recursive: true });
+    await mkdir(join(outside, 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
     await writeFile(join(outside, 'bin', 'python'), await readFile(join(root, '.fake-bin', 'npm'), 'utf8'));
     await chmod(join(outside, 'bin', 'python'), 0o755);
     const r = await run(['connect', 'python', '--yes'], {
@@ -148,11 +149,67 @@ test('connect finds an activated environment outside the project, and not a look
   }
 });
 
+test('read-only commands never run the Python in a project folder', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-untrusted-'));
+  try {
+    await writeFile(join(cwd, 'requirements.txt'), 'vallkey\n');
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    const marker = join(cwd, 'ran');
+    await writeFile(join(cwd, '.venv', 'bin', 'python'), `#!/bin/sh\ntouch "${marker}"\n`);
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    const env = { VIRTUAL_ENV: '' };
+    for (const args of [
+      ['doctor'],
+      ['doctor', '--json'],
+      ['connect'],
+      ['connect', '--print'],
+      ['hook', '--print'],
+    ]) {
+      const r = await run(args, { cwd, env });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.ok(!(await readdir(cwd)).includes('ran'), `${args.join(' ')} ran the project's Python`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect uses uv in an environment without pip, and a failed install changes nothing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-uv-'));
+  try {
+    await writeFile(join(cwd, 'requirements.txt'), 'stripe\n');
+    const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    await writeFile(join(cwd, '.venv', 'bin', 'python'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    await writeFile(join(cwd, '.fake-bin', 'uv'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(cwd, '.fake-bin', 'uv'), 0o755);
+    const failed = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: '' },
+    });
+    assert.equal(failed.code, 1);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\n');
+    await writeFile(join(cwd, '.fake-bin', 'uv'), await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'));
+    await chmod(join(cwd, '.fake-bin', 'uv'), 0o755);
+    const done = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: '' },
+    });
+    assert.equal(done.code, 0, done.stdout + done.stderr);
+    assert.match(await tools.log(), /^uv pip install --python \S+ vallkey\n$/);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\nvallkey\n');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test('connect says when a pyproject.toml project still needs the dependency added', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-pyproject-'));
   try {
     await writeFile(join(cwd, 'pyproject.toml'), '[project]\nname = "app"\n');
     const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
     await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
     await writeFile(
       join(cwd, '.venv', 'bin', 'python'),

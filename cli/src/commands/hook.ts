@@ -91,6 +91,19 @@ export async function detect(cwd: string) {
   return found;
 }
 
+// A start script that loads the hook in the process that serves the app: the last command
+// of a chain ("npm run build && node app.js"), and by the runtime that command really uses
+// (a Bun project can start with node, which ignores BUN_OPTIONS).
+export function withHook(start: string, lang: string) {
+  const at = Math.max(start.lastIndexOf('&&') + 1, start.lastIndexOf(';'));
+  const head = at > 0 ? start.slice(0, at + 1).trimEnd() + ' ' : '';
+  const last = start.slice(head.length).trimStart();
+  if (/^node\s/.test(last)) return `${head}${last.replace(/^node\s+/, 'node --require vallkey/auto ')}`;
+  if (/^bun\s/.test(last))
+    return `${head}${last.replace(/^bun\s+(?:run\s+)?/, 'bun --preload vallkey/auto ')}`;
+  return `${head}${lang === 'bun' ? "BUN_OPTIONS='--preload vallkey/auto'" : "NODE_OPTIONS='--require vallkey/auto'"} ${last}`;
+}
+
 async function packageJson(cwd: string): Promise<ProjectPackage | null> {
   try {
     return JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8'));
@@ -129,6 +142,19 @@ async function venvPython(cwd: string) {
   return null;
 }
 
+// Looks in the environment's folders and never runs its Python: doctor and previews are
+// read-only, and in a cloned project that interpreter could be anything.
+async function inEnvironment(py: string, name: RegExp) {
+  const root = resolve(py, '..', '..');
+  const versions = await readdir(join(root, 'lib')).catch(() => [] as string[]);
+  for (const site of [
+    join(root, 'Lib', 'site-packages'),
+    ...versions.map((v) => join(root, 'lib', v, 'site-packages')),
+  ])
+    if ((await readdir(site).catch(() => [] as string[])).some((entry) => name.test(entry))) return true;
+  return false;
+}
+
 // Whether the app can already load the package, so nothing needs installing.
 export async function installed(lang: string, cwd: string, names: Set<string>) {
   if (lang === 'node' || lang === 'bun') {
@@ -146,13 +172,7 @@ export async function installed(lang: string, cwd: string, names: Set<string>) {
       : names.has('pyproject.toml') &&
         /["']vallkey(?![\w-])/.test(await readFile(join(cwd, 'pyproject.toml'), 'utf8'));
     const py = await venvPython(cwd);
-    if (!py) return listed;
-    try {
-      execFileSync(py, ['-c', 'import vallkey'], { stdio: 'ignore' });
-      return listed;
-    } catch {
-      return false;
-    }
+    return listed && (!py || (await inEnvironment(py, /^vallkey-.*\.dist-info$/)));
   }
   if (lang === 'ruby' && names.has('Gemfile.lock'))
     return /^ {4}vallkey \(/m.test(await readFile(join(cwd, 'Gemfile.lock'), 'utf8'));
@@ -202,6 +222,12 @@ async function installStep(lang: string, cwd: string, names: Set<string>, flags:
   }
   try {
     if (pip) {
+      // Installed first: a failure leaves the project as it was.
+      if (py && (await inEnvironment(py, /^pip$/)))
+        execFileSync(py, ['-m', 'pip', 'install', 'vallkey'], { cwd, stdio: 'inherit' });
+      // Environments made by uv have no pip of their own.
+      else if (py)
+        execFileSync('uv', ['pip', 'install', '--python', py, 'vallkey'], { cwd, stdio: 'inherit' });
       if (names.has('requirements.txt')) {
         const text = await readFile(join(cwd, 'requirements.txt'), 'utf8');
         if (!LISTED.test(text))
@@ -210,7 +236,6 @@ async function installStep(lang: string, cwd: string, names: Set<string>, flags:
             `${text && !text.endsWith('\n') ? '\n' : ''}vallkey\n`,
           );
       }
-      if (py) execFileSync(py, ['-m', 'pip', 'install', 'vallkey'], { cwd, stdio: 'inherit' });
     } else runCommand(command, cwd);
   } catch {
     throw new CliError(`Installing the vallkey package failed. Run it yourself: ${command}`);
@@ -438,12 +463,7 @@ export async function hook(args: string[], flags: Flags) {
     if (start && (lang === 'node' || lang === 'bun')) {
       const flag = lang === 'bun' ? '--preload vallkey/auto' : '--require vallkey/auto';
       const loaded = start.includes('vallkey/auto');
-      const runner = lang === 'bun' ? /^bun\s+(?:run\s+)?/ : /^node\s+/;
-      const updated = loaded
-        ? start
-        : runner.test(start)
-          ? start.replace(runner, `${lang} ${flag} `)
-          : `${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' ${start}`;
+      const updated = loaded ? start : withHook(start, lang);
       if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (loaded) {
         out(`  2. ${green('✓')} Your start script already turns on auto-connect.`);

@@ -450,4 +450,6 @@ def uninstall():
         _pending.clear()
         if _finder in sys.meta_path:
             sys.meta_path.remove(_finder)
+        # The waiting finder from _startup would otherwise install it all again.
+        sys.meta_path[:] = [f for f in sys.meta_path if not getattr(f, "_vallkey_lazy", False)]
         _installed = False

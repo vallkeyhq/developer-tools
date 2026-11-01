@@ -165,6 +165,18 @@ class AutoTest < Minitest::Test
     assert_nil plain["headers"]["x-vallkey-hook"]
   end
 
+  def test_can_be_turned_off_from_a_env_file_loaded_after_start
+    out, = ruby(<<~RUBY)
+      require "net/http"
+      require "json"
+      send = -> { JSON.parse(Net::HTTP.get(URI("\#{ENV['PROVIDER']}/x"), { "x-api-key" => ENV["GHOST"] }))["from"] }
+      on = send.call
+      ENV["VALLKEY_AUTO"] = "0"
+      puts [on, send.call].join(" ")
+    RUBY
+    assert_equal "vallkey provider", out
+  end
+
   def test_says_what_it_does_without_showing_the_key
     _, err = ruby(<<~RUBY, "VALLKEY_DEBUG" => "1")
       require "net/http"

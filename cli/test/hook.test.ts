@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { detect, phpFile } from '../dist/src/commands/hook.js';
+import { detect, phpFile, withHook } from '../dist/src/commands/hook.js';
 
 const BIN = new URL('../dist/bin/vallkey.js', import.meta.url).pathname;
 const MANIFEST = JSON.parse(await readFile(new URL('../dist/src/hooks.json', import.meta.url), 'utf8'));
@@ -280,6 +280,27 @@ describe('vallkey hook', () => {
     assert.match(python.stdout, /uv add vallkey[\s\S]*VALLKEY_AUTO=1[\s\S]*Not in a \.env file/);
     const ruby = await run(['hook'], { cwd: await make({ Gemfile: '' }) });
     assert.match(ruby.stdout, /bundle add vallkey[\s\S]*RUBYOPT=-rvallkey\/auto/);
+  });
+
+  it('loads the hook in the command that serves the app, by the runtime it uses', () => {
+    for (const [start, lang, expected] of [
+      ['node app.js', 'node', 'node --require vallkey/auto app.js'],
+      ['node app.js', 'bun', 'node --require vallkey/auto app.js'],
+      ['bun run app.ts', 'bun', 'bun --preload vallkey/auto app.ts'],
+      ['bun app.ts', 'node', 'bun --preload vallkey/auto app.ts'],
+      ['tsx src/index.ts', 'node', "NODE_OPTIONS='--require vallkey/auto' tsx src/index.ts"],
+      ['tsx src/index.ts', 'bun', "BUN_OPTIONS='--preload vallkey/auto' tsx src/index.ts"],
+      [
+        'NODE_ENV=production node app.js',
+        'node',
+        "NODE_OPTIONS='--require vallkey/auto' NODE_ENV=production node app.js",
+      ],
+      ['npm run build && node app.js', 'node', 'npm run build && node --require vallkey/auto app.js'],
+      ['npm run build; node app.js', 'node', 'npm run build; node --require vallkey/auto app.js'],
+      ['a && b && tsx app.ts', 'node', "a && b && NODE_OPTIONS='--require vallkey/auto' tsx app.ts"],
+      ['node app.js | pino-pretty', 'node', 'node --require vallkey/auto app.js | pino-pretty'],
+    ])
+      assert.equal(withHook(start, lang), expected);
   });
 
   it('says plainly when a language cannot be changed at runtime', async () => {

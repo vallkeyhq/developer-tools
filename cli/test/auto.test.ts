@@ -280,6 +280,22 @@ describe('vallkey/auto', () => {
     assert.equal(last().from, null);
   });
 
+  it('can be turned off from a .env file loaded after start', async () => {
+    const r = await node(
+      `(async () => {
+      const headers = { authorization: 'Bearer ' + process.env.GHOST };
+      const viaFetch = async () => (await (await fetch('${providerUrl}/x', { headers })).json()).from;
+      const viaHttp = () => new Promise((resolve) => require('http').get('${providerUrl}/x', { headers }, (r) => { let s = ''; r.on('data', (c) => (s += c)); r.on('end', () => resolve(JSON.parse(s).from)); }));
+      const on = [await viaFetch(), await viaHttp()];
+      process.env.VALLKEY_AUTO = '0';
+      console.log(...on, await viaFetch(), await viaHttp());
+    })()`,
+      env,
+    );
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.out, 'vallkey vallkey provider provider');
+  });
+
   it('follows VALLKEY_API set after start, as dotenv does, and ignores a bad late value', async () => {
     const seenLate = [];
     const domain = await serve('domain', seenLate);

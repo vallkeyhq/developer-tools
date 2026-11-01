@@ -170,6 +170,7 @@ module Vallkey
 
     class << self
       def redirect?(http, req, body)
+        return false if ENV["VALLKEY_AUTO"] == "0" # a .env file loaded after start can turn it off
         t = target
         return false if http.address == t.host && http.port == t.port
         headers = []
@@ -187,6 +188,7 @@ module Vallkey
       # Already addressed to Vallkey by an SDK's address setting: say which app it is, so
       # one app is one place on the dashboard however each SDK reaches Vallkey.
       def tag(http, req, body)
+        return if ENV["VALLKEY_AUTO"] == "0"
         t = target
         return unless http.address == t.host && http.port == t.port
         return if req[WHO_HEADER]

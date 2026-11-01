@@ -226,6 +226,8 @@ function patchFetch() {
     input: RequestInfo | URL,
     init?: RequestInit,
   ) {
+    // Read on every request, so a .env file loaded after start can still turn it off.
+    if (env('VALLKEY_AUTO') === '0') return original.call(this, input, init);
     let protectedRequest = false;
     try {
       const isRequest = typeof Request !== 'undefined' && input instanceof Request;
@@ -325,6 +327,10 @@ function patchNode() {
 
   function make(defaultProtocol: Protocol) {
     return function request(...args: NodeArguments): ClientRequest {
+      if (env('VALLKEY_AUTO') === '0') {
+        const untouched = originals[defaultProtocol].request as (...args: NodeArguments) => ClientRequest;
+        return untouched.apply(originals[defaultProtocol].mod, args);
+      }
       let protectedRequest = false;
       try {
         const { url, options, cb } = split(args);

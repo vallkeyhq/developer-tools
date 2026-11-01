@@ -271,8 +271,9 @@ class AutoTest(unittest.TestCase):
     # Installing the package puts vallkey_auto.pth in site-packages; site.addsitedir runs
     # it the same way Python does at start, before any of the app's code.
     INSTALLED = """
-        import json, os, site, urllib.request
+        import json, os, site, sys
         site.addsitedir(os.environ['PYTHONPATH'])
+        import urllib.request
         ghost = lambda: urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
         plain = lambda: urllib.request.Request('%s/plain', headers={'Authorization': 'Bearer sk-real'})
         send = lambda req: json.load(urllib.request.urlopen(req))['from']
@@ -284,6 +285,78 @@ class AutoTest(unittest.TestCase):
     def test_installed_package_is_on_with_no_import_or_variable(self):
         out, _ = self.run_py(self.installed("print(send(ghost()), send(plain()))\n"))
         self.assertEqual(out, "vallkey provider")
+
+    def test_starting_python_loads_nothing_until_a_client_is_imported(self):
+        out, _ = self.run_py(
+            """
+            import os, site, sys
+            site.addsitedir(os.environ['PYTHONPATH'])
+            before = 'vallkey._patch' in sys.modules
+            import json
+            middle = 'vallkey._patch' in sys.modules
+            import urllib.request
+            print(before, middle, 'vallkey._patch' in sys.modules)
+            """
+        )
+        self.assertEqual(out, "False False True")
+
+    def test_a_client_loaded_before_the_package_starts_is_covered(self):
+        out, _ = self.run_py(
+            """
+            import json, os, site, urllib.request
+            site.addsitedir(os.environ['PYTHONPATH'])
+            req = urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+            print(json.load(urllib.request.urlopen(req))['from'])
+            """
+            % self.provider_url
+        )
+        self.assertEqual(out, "vallkey")
+
+    def test_uninstall_before_any_client_stays_uninstalled(self):
+        out, _ = self.run_py(
+            """
+            import json, os, site
+            site.addsitedir(os.environ['PYTHONPATH'])
+            import vallkey
+            vallkey.uninstall()
+            import urllib.request
+            req = urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+            print(json.load(urllib.request.urlopen(req))['from'])
+            """
+            % self.provider_url
+        )
+        self.assertEqual(out, "provider")
+
+    def test_clients_imported_at_once_from_threads_are_all_covered(self):
+        out, _ = self.run_py(
+            """
+            import os, site, threading, sys
+            site.addsitedir(os.environ['PYTHONPATH'])
+            names = ['urllib.request', 'requests', 'urllib3', 'httpx']
+            barrier = threading.Barrier(len(names))
+            def load(name):
+                barrier.wait()
+                try:
+                    __import__(name)
+                except ImportError:
+                    pass
+            threads = [threading.Thread(target=load, args=(n,)) for n in names]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+            import vallkey._patch as p
+            print('urllib.request' in p._PATCHERS, not any(getattr(f, '_vallkey_lazy', False) for f in sys.meta_path), hasattr(sys.modules['urllib.request'].AbstractHTTPHandler.do_open, '_vallkey'))
+            """
+        )
+        self.assertEqual(out, "True True True")
+
+    def test_the_watched_list_matches_what_is_patched(self):
+        out, _ = self.run_py(
+            """
+            import vallkey._patch as p, vallkey._startup as s
+            print(sorted(p._PATCHERS) == sorted(s.WATCHED))
+            """
+        )
+        self.assertEqual(out, "True")
 
     def test_vallkey_auto_0_turns_it_off_at_start(self):
         out, _ = self.run_py(self.installed("print(send(ghost()))\n"), VALLKEY_AUTO="0")
