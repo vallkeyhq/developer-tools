@@ -69,13 +69,42 @@ public final class Rewrite {
 
     /** The same, with headers as a flat list: name, value, name, value… */
     public static String[] decide(String scheme, String host, int port, String rawQuery, List<String> pairs) {
+        return decide(scheme, host, port, rawQuery, headerMap(pairs));
+    }
+
+    /**
+     * Whether a request already addressed to Vallkey by an SDK's address setting should say
+     * which app it is, so one app is one place on the dashboard however each SDK reaches
+     * Vallkey. A request that already says is left alone: OkHttp's advice runs on every
+     * Request.Builder.build(), its own included, and would otherwise never finish.
+     */
+    public static boolean addressed(String scheme, String host, int port, String rawQuery, Map<String, List<String>> headers) {
+        try {
+            if (!on || scheme == null || host == null) return false;
+            String s = scheme.toLowerCase(Locale.ROOT);
+            if (!s.equals("http") && !s.equals("https")) return false;
+            String[] t = target();
+            if (!host.equalsIgnoreCase(t[1]) || (port > 0 ? port : defaultPort(s)) != Integer.parseInt(t[2])) return false;
+            if (headers != null) for (String name : headers.keySet()) if (WHO_HEADER.equalsIgnoreCase(name)) return false;
+            return hasGhost(rawQuery, headers);
+        } catch (RuntimeException e) {
+            return false; // anything unusual goes out as it was
+        }
+    }
+
+    /** The same, with headers as a flat list: name, value, name, value… */
+    public static boolean addressed(String scheme, String host, int port, String rawQuery, List<String> pairs) {
+        return addressed(scheme, host, port, rawQuery, headerMap(pairs));
+    }
+
+    private static Map<String, List<String>> headerMap(List<String> pairs) {
         Map<String, List<String>> headers = new java.util.HashMap<>();
         for (int i = 0; i + 1 < pairs.size(); i += 2) {
             List<String> values = headers.get(pairs.get(i));
             if (values == null) headers.put(pairs.get(i), values = new ArrayList<>());
             values.add(pairs.get(i + 1));
         }
-        return decide(scheme, host, port, rawQuery, headers);
+        return headers;
     }
 
     /** The address on Vallkey for a path and query. */
@@ -98,7 +127,13 @@ public final class Rewrite {
             @SuppressWarnings("unchecked")
             Map<String, List<String>> headers = (Map<String, List<String>>) headersOf.invoke(requests);
             String[] t = decide(url.getProtocol(), url.getHost(), url.getPort(), url.getQuery(), headers);
-            if (t == null) return null;
+            if (t == null) {
+                if (addressed(url.getProtocol(), url.getHost(), url.getPort(), url.getQuery(), headers)) {
+                    setHeader.invoke(requests, WHO_HEADER, who());
+                    setHeader.invoke(userHeaders, WHO_HEADER, who());
+                }
+                return null;
+            }
             // An https connection object cannot carry plain http, nor the other way round.
             if (!t[0].equals(url.getProtocol().toLowerCase(Locale.ROOT))) return null;
             setHeader.invoke(requests, HOOK_HEADER, t[3]);

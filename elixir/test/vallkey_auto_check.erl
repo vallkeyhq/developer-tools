@@ -64,6 +64,23 @@ run() ->
     {ok, {_, _, Posted}} = httpc:request(post, {"http://api.stripe.com/v1/customers", [{"authorization", "Bearer " ++ G}], "application/x-www-form-urlencoded", "email=a"}, [], []),
     F6 = check("a POST goes to Vallkey", Posted =:= "vallkey"),
     last(),
+    Api = "http://127.0.0.1:" ++ integer_to_list(VPort),
+    F10 = check("a request already addressed to Vallkey stays there", get(Api ++ "/v1/tagged", [{"authorization", "Bearer " ++ G}]) =:= "vallkey"),
+    {_, _, TaggedPath, Tagged} = last(),
+    F11 = check("it says which app it is, and nothing else changes", TaggedPath =:= <<"/v1/tagged">>
+        andalso proplists:get_value(<<"x-vallkey-host">>, Tagged) =:= undefined
+        andalso binary:match(proplists:get_value(<<"x-vallkey-hook">>, Tagged, <<>>), <<"erlang/">>) =:= {0, 7}),
+    %% Finch and hackney are not in this image; their rewrite is checked directly.
+    Bearer = {<<"authorization">>, iolist_to_binary(["Bearer ", G])},
+    Req = #{scheme => http, host => <<"127.0.0.1">>, port => VPort, query => nil, headers => [Bearer]},
+    [#{headers := FinchHeaders, host := FinchHost} | _] = vallkey_auto:rewrite(finch, [Req, name]),
+    F13 = check("Finch names the app without moving a request already at Vallkey", FinchHost =:= <<"127.0.0.1">> andalso proplists:is_defined(<<"x-vallkey-hook">>, FinchHeaders) andalso not proplists:is_defined(<<"x-vallkey-host">>, FinchHeaders)),
+    [_, HackneyUrl, HackneyHeaders | _] = vallkey_auto:rewrite(hackney, [get, list_to_binary(Api ++ "/v1/x"), [Bearer]]),
+    F14 = check("hackney names the app without moving a request already at Vallkey", HackneyUrl =:= list_to_binary(Api ++ "/v1/x") andalso proplists:is_defined(<<"x-vallkey-hook">>, HackneyHeaders)),
+    F15 = check("a request that already says is not named twice", vallkey_auto:rewrite(finch, [Req#{headers := FinchHeaders}, name]) =:= [Req#{headers := FinchHeaders}, name]),
+    get(Api ++ "/v1/plain", []),
+    {_, _, _, Plain} = last(),
+    F12 = check("one without a ghost key is left alone", proplists:get_value(<<"x-vallkey-hook">>, Plain) =:= undefined),
     F7 = check("other functions of the module still work", is_list(httpc:info())),
     F8 = check("undefined functions still fail as before", try httpc:no_such_function(), false catch error:undef -> true end),
-    halt(F1 + F2 + F3 + F4 + F5 + F6 + F7 + F8 + F9).
+    halt(F1 + F2 + F3 + F4 + F5 + F6 + F7 + F8 + F9 + F10 + F11 + F12 + F13 + F14 + F15).

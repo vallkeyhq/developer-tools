@@ -79,6 +79,18 @@ public class AgentCheck {
         check("HttpURLConnection: it says what sent the request", last[6] != null && last[6].startsWith("java/0.1.0; "));
         check("HttpURLConnection: a request without a ghost key is left alone", huc(providerUrl + "/plain", "Authorization", "Bearer sk-real", null).equals("provider"));
 
+        String api = System.getenv("VALLKEY_API");
+        client.send(HttpRequest.newBuilder(URI.create(api + "/v1/tagged")).header("Authorization", "Bearer " + ghost).POST(HttpRequest.BodyPublishers.ofString("{}")).build(), HttpResponse.BodyHandlers.ofString());
+        last = seen.get(seen.size() - 1);
+        check("HttpClient: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/tagged") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.1.0; "));
+        client.send(HttpRequest.newBuilder(URI.create(api + "/v1/plain")).build(), HttpResponse.BodyHandlers.ofString());
+        check("HttpClient: one without a ghost key is left alone", seen.get(seen.size() - 1)[6] == null);
+        huc(api + "/v1/huc", "Authorization", "Bearer " + ghost, "{}");
+        last = seen.get(seen.size() - 1);
+        check("HttpURLConnection: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/huc") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.1.0; "));
+        huc(api + "/v1/huc-plain", "Accept", "application/json", null);
+        check("HttpURLConnection: one without a ghost key is left alone", seen.get(seen.size() - 1)[6] == null);
+
         vallkey.stop(0);
         provider.stop(0);
         System.exit(failures == 0 ? 0 : 1);

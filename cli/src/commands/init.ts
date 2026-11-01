@@ -26,13 +26,15 @@ import {
   warn,
 } from '../ui.js';
 import { errorMessage } from '../validation.cjs';
+import { connect } from './connect.js';
+import { detect } from './hook.js';
 interface FoundEntry {
   file: { path: string; parsed: ParsedEnv };
   entry: EnvEntry;
   kind: KeyKind;
 }
 
-const ENV_FILES = [
+export const ENV_FILES = [
   '.env',
   '.env.local',
   '.env.development',
@@ -81,9 +83,19 @@ export function isIgnored(path: string) {
   }
 }
 
-// What to change in the code, for SDKs that do not read a base URL from the environment.
-function nextStep(provider: string, api: string, envName: string, origin?: string) {
+// What to change in the code, for SDKs that do not read a base URL from the environment,
+// in the project's own language.
+function nextStep(provider: string, api: string, envName: string, origin?: string, lang = 'node') {
   const url = new URL(api);
+  if (lang === 'python') {
+    if (provider === 'stripe') return `stripe.api_base = "${api}"`;
+    if (OPENAI_COMPATIBLE[provider])
+      return `OpenAI(api_key=os.environ["${envName}"], base_url="${api}${OPENAI_COMPATIBLE[provider]}")`;
+    if (provider === 'gemini')
+      return `genai.Client(api_key=os.environ["${envName}"], http_options={"base_url": "${api}"})`;
+  }
+  if (lang !== 'node' && lang !== 'bun')
+    return `send requests to ${api} instead of ${origin ?? 'the provider'}; paths stay the same`;
   if (provider === 'stripe') {
     const extra = url.port ? `, port: ${url.port}, protocol: '${url.protocol.slice(0, -1)}'` : '';
     return `new Stripe(process.env.${envName}, { host: '${url.hostname}'${extra} })`;
@@ -232,17 +244,20 @@ export async function init(args: string[], flags: Flags) {
       );
   }
 
+  let connectAfter = false;
   if (created.size) {
     out();
     ok(`Swapped ${plural(created.size, 'key')} for ghost keys`);
     out();
     out(table([...created.values()].map((c) => ['  ' + c.names.join(', '), c.kind.title, dim(c.keyId)])));
+    const lang = (await detect(cwd))[0];
     const steps = [...created.values()]
       .filter((c) => !BASE_URL_VARS[c.kind.provider])
       .map((c) => [
         c.kind.title,
-        nextStep(c.kind.provider, auth.api, c.names[0], origins.get(c.kind.provider)),
+        nextStep(c.kind.provider, auth.api, c.names[0], origins.get(c.kind.provider), lang),
       ]);
+    connectAfter = steps.length > 0;
     const auto = [
       ...new Set(
         [...created.values()]
@@ -255,7 +270,7 @@ export async function init(args: string[], flags: Flags) {
       lines.push(`${green('✓')} The official SDKs read ${auto.join(', ')}, so those need no code change.`);
     if (steps.length) {
       lines.push(
-        `${dim('•')} For the others, ${cyan('npx vallkey hook')} turns on auto-connect, with no code changes. Or change one line:`,
+        `${dim('•')} For the others, ${cyan('npx vallkey connect')} turns on auto-connect, with no code changes. Or change one line:`,
       );
       for (const [title, step] of steps) lines.push(`    ${title}: ${cyan(step)}`);
     }
@@ -271,6 +286,14 @@ export async function init(args: string[], flags: Flags) {
     for (const f of failures) bad(`${f.names.join(', ')}: ${f.message}`);
     out(dim('  These keys were left as they were.'));
     return 1;
+  }
+  // Straight on to connecting, while the person is here; never unasked in scripts.
+  if (connectAfter && process.stdin.isTTY && !flags.yes) {
+    out();
+    if (await confirm('Connect this project now, so the other SDKs need no code change?')) {
+      out();
+      return connect([], flags);
+    }
   }
   return 0;
 }

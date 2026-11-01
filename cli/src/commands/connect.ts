@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { gatewayOrigin as gateway, resolveAuth } from '../config.js';
@@ -18,7 +18,7 @@ import {
   tidyPath,
   warn,
 } from '../ui.js';
-import { detect, hook } from './hook.js';
+import { detect, hook, installed, startEdits } from './hook.js';
 import { LANGUAGES as LANGUAGE_NAMES } from './status.js';
 
 const ADDRESS: Record<string, [string, string]> = {
@@ -65,6 +65,8 @@ export async function connect(args: string[], flags: Flags) {
     throw new CliError('--method must be auto, address or hook');
   const api = gateway((await resolveAuth(flags)).api);
   const project = await inspect(process.cwd());
+  // Changes are made only after asking, so without a terminal (CI) it shows them instead.
+  const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
   const node = !args.length && project.languages.some((l) => ['node', 'bun'].includes(l));
   const chosen = args.length ? args : project.languages;
   const compiled = chosen.length > 0 && chosen.every((l) => ['go', 'golang', 'rust'].includes(l));
@@ -99,7 +101,7 @@ export async function connect(args: string[], flags: Flags) {
     detail('This covers the SDKs listed. An address set in your code wins over these settings.');
   } else {
     out();
-    const status = await hook(args, { ...flags, api, print: true, embedded: true });
+    const status = await hook(args, { ...flags, api, print: preview, embedded: true });
     if (status) {
       out();
       warn(
@@ -111,11 +113,21 @@ export async function connect(args: string[], flags: Flags) {
   out();
   heading('Then check it');
   out('  1. Restart or redeploy your app.');
-  out(`  2. Make one safe request and copy the ${cyan('x-guard-request-id')} header from its response.`);
-  out(`  3. ${cyan('npx vallkey verify <key id> --request-id <x-guard-request-id>')}`);
-  detail('On a test key, also check a request your rules block: add --expect denied.');
+  out(
+    `  2. ${cyan('npx vallkey verify')}  ${dim('and make one safe request: it shows each key as it arrives')}`,
+  );
+  detail(
+    'On a test key, also check a request your rules block: vallkey verify <key id> --request-id <id> --expect denied.',
+  );
   out();
-  out(dim('Nothing in your project was changed.'));
+  if (preview)
+    out(
+      dim(
+        address || flags.print
+          ? 'Nothing in your project was changed.'
+          : 'Nothing in your project was changed. Run it in a terminal, or with --yes, to set it up.',
+      ),
+    );
   return 0;
 }
 
@@ -201,6 +213,15 @@ export async function doctor(args: string[], flags: Flags) {
                 },
       );
     } else {
+      const lang = project.languages.includes('bun') ? 'bun' : 'node';
+      const { edits, warnings } = await startEdits(cwd, new Set(await readdir(cwd).catch(() => [])), lang);
+      for (const file of new Set(edits.map((e) => e.file)))
+        checks.push({
+          check: 'startup',
+          status: 'warning',
+          message: `${file} starts your app without auto-connect. Run vallkey connect`,
+        });
+      for (const message of warnings) checks.push({ check: 'startup', status: 'warning', message });
       checks.push({
         check: 'startup',
         status: 'info',
@@ -208,11 +229,30 @@ export async function doctor(args: string[], flags: Flags) {
           'Make sure your app loads vallkey/auto before its SDKs (NODE_OPTIONS or an import at the top). This can only be checked by verify',
       });
     }
+  } else if (project.languages.includes('python')) {
+    const names = new Set(await readdir(cwd).catch(() => []));
+    checks.push(
+      (await installed('python', cwd, names))
+        ? { check: 'package', status: 'ok', message: 'The vallkey package is in your Python dependencies' }
+        : {
+            check: 'package',
+            status: 'warning',
+            message:
+              'The vallkey package is not in your Python dependencies, or not installed in the project environment. Run vallkey connect',
+          },
+    );
+    checks.push({
+      check: 'startup',
+      status: 'info',
+      message:
+        'vallkey 0.3 for Python reads VALLKEY_AUTO=1 when Python starts: set it where the app runs, not in .env. This can only be checked by verify',
+    });
   } else {
     checks.push({
       check: 'runtime',
       status: 'info',
-      message: 'Local checks cover Node.js and Bun projects. For other languages, run vallkey connect',
+      message:
+        'Local checks cover Node.js, Bun and Python projects. For other languages, run vallkey connect',
     });
   }
   const result = {
@@ -241,12 +281,14 @@ export async function doctor(args: string[], flags: Flags) {
       ? `${bold('Not ready.')} Fix the item marked ✗ first.`
       : warnings
         ? `${bold('Almost ready.')} Look at the ${warnings === 1 ? 'item' : 'items'} marked !.`
-        : `${bold('Ready on this computer.')}`,
+        : checks.some((c) => c.check === 'package' && c.status === 'ok')
+          ? `${bold('Ready on this computer.')}`
+          : `${bold('No problems found,')} but only the server address could be checked here.`,
   );
   detail('These checks run here. Only verify proves your deployed app is connected.');
   next([
-    '1. Deploy or restart your app, and make one safe request with a ghost key.',
-    `2. ${cyan('npx vallkey verify <key id> --request-id <x-guard-request-id>')}`,
+    '1. Deploy or restart your app.',
+    `2. ${cyan('npx vallkey verify')}, and make one safe request with a ghost key.`,
   ]);
   return result.ready ? 0 : 1;
 }

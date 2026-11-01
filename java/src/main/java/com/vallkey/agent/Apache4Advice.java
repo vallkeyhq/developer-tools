@@ -25,7 +25,10 @@ public final class Apache4Advice {
             pairs.add(h.getValue());
         }
         String[] t = Rewrite.decide(scheme, host, port, uri.getRawQuery(), pairs);
-        if (t == null) return;
+        if (t == null) {
+            if (Rewrite.addressed(scheme, host, port, uri.getRawQuery(), pairs)) request.setHeader(Rewrite.WHO_HEADER, Rewrite.who());
+            return;
+        }
         target = new org.apache.http.HttpHost(t[1], Integer.parseInt(t[2]), t[0]);
         if (uri.isAbsolute()) {
             URI moved = URI.create(Rewrite.moved(uri.getRawPath(), uri.getRawQuery(), t));

@@ -19,8 +19,8 @@ public final class JdkHttpClientAdvice {
         if (request == null) return;
         URI uri = request.uri();
         String[] t = Rewrite.decide(uri.getScheme(), uri.getHost(), uri.getPort(), uri.getRawQuery(), request.headers().map());
-        if (t == null) return;
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(Rewrite.moved(uri.getRawPath(), uri.getRawQuery(), t)));
+        if (t == null && !Rewrite.addressed(uri.getScheme(), uri.getHost(), uri.getPort(), uri.getRawQuery(), request.headers().map())) return;
+        HttpRequest.Builder b = HttpRequest.newBuilder(t == null ? uri : URI.create(Rewrite.moved(uri.getRawPath(), uri.getRawQuery(), t)));
         b.method(request.method(), request.bodyPublisher().isPresent() ? request.bodyPublisher().get() : HttpRequest.BodyPublishers.noBody());
         for (Map.Entry<String, List<String>> e : request.headers().map().entrySet()) {
             for (String v : e.getValue()) b.header(e.getKey(), v);
@@ -28,7 +28,7 @@ public final class JdkHttpClientAdvice {
         if (request.timeout().isPresent()) b.timeout(request.timeout().get());
         if (request.version().isPresent()) b.version(request.version().get());
         b.expectContinue(request.expectContinue());
-        b.header(Rewrite.HOOK_HEADER, t[3]);
+        if (t != null) b.header(Rewrite.HOOK_HEADER, t[3]);
         b.header(Rewrite.WHO_HEADER, Rewrite.who());
         request = b.build();
     }

@@ -280,6 +280,81 @@ describe('vallkey/auto', () => {
     assert.equal(last().from, null);
   });
 
+  it('can be turned off from a .env file loaded after start', async () => {
+    const r = await node(
+      `(async () => {
+      const headers = { authorization: 'Bearer ' + process.env.GHOST };
+      const viaFetch = async () => (await (await fetch('${providerUrl}/x', { headers })).json()).from;
+      const viaHttp = () => new Promise((resolve) => require('http').get('${providerUrl}/x', { headers }, (r) => { let s = ''; r.on('data', (c) => (s += c)); r.on('end', () => resolve(JSON.parse(s).from)); }));
+      const on = [await viaFetch(), await viaHttp()];
+      process.env.VALLKEY_AUTO = '0';
+      console.log(...on, await viaFetch(), await viaHttp());
+    })()`,
+      env,
+    );
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.out, 'vallkey vallkey provider provider');
+  });
+
+  it('follows VALLKEY_API set after start, as dotenv does, and ignores a bad late value', async () => {
+    const seenLate = [];
+    const domain = await serve('domain', seenLate);
+    const late = `http://127.0.0.1:${domain.address().port}`;
+    try {
+      const r = await node(
+        `(async () => {
+        const send = async () => (await (await fetch('https://api.openai.com/v1/models', { headers: { authorization: 'Bearer ' + process.env.GHOST } })).json()).from;
+        const a = await send();
+        process.env.VALLKEY_API = '${late}';
+        const b = await send();
+        process.env.VALLKEY_API = 'not a url';
+        console.log(a, b, await send(), (await (await fetch('${providerUrl}/plain')).json()).from);
+      })()`,
+        env,
+      );
+      assert.equal(r.code, 0, r.err);
+      assert.equal(r.out, 'vallkey domain domain provider');
+      assert.match(r.err, /VALLKEY_API changed to an invalid value/);
+      assert.doesNotMatch(r.err, /not a url/);
+    } finally {
+      domain.close();
+    }
+  });
+
+  it('names the app on ghost key requests already addressed to Vallkey, changing nothing else', async () => {
+    const r = await node(
+      `(async () => {
+      const g = process.env.GHOST;
+      const api = process.env.VALLKEY_API;
+      await fetch(api + '/v1/chat', { method: 'POST', headers: { authorization: 'Bearer ' + g }, body: '{"a":1}' });
+      await fetch(new Request(api + '/v1/request', { headers: { 'x-api-key': g } }));
+      await new Promise((resolve) => {
+        const u = new URL(api);
+        require('http').get({ hostname: u.hostname, port: u.port, path: '/v1/node', headers: ['authorization', 'Bearer ' + g] }, (r) => { r.resume(); r.on('end', resolve); });
+      });
+      await new Promise((resolve) => require('http').get(api + '/v1/url', { headers: { authorization: 'Bearer ' + g } }, (r) => { r.resume(); r.on('end', resolve); }));
+      await fetch(api + '/v1/plain');
+    })()`,
+      env,
+    );
+    assert.equal(r.code, 0, r.err);
+    const [chat, request, nodeCall, url, plain] = seen.slice(-5);
+    for (const [entry, path] of [
+      [chat, '/v1/chat'],
+      [request, '/v1/request'],
+      [nodeCall, '/v1/node'],
+      [url, '/v1/url'],
+    ]) {
+      assert.equal(entry.server, 'vallkey');
+      assert.equal(entry.path, path);
+      assert.match(entry.hook, /^node\//);
+      assert.equal(entry.from, null);
+    }
+    assert.equal(chat.body, '{"a":1}');
+    assert.equal(nodeCall.auth, `Bearer ${GHOST}`);
+    assert.equal(plain.hook, null);
+  });
+
   it('preserves cancellation and streaming request bodies when headers identify the credential', async () => {
     const r = await node(
       `(async () => {

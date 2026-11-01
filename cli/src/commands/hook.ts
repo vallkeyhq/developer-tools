@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { gatewayOrigin } from '../config.js';
 import type { Flags, ProjectPackage } from '../types.js';
@@ -90,6 +91,156 @@ export async function detect(cwd: string) {
   return found;
 }
 
+// A start script that loads the hook in the process that serves the app: the last command
+// of a chain ("npm run build && node app.js"), and by the runtime that command really uses
+// (a Bun project can start with node, which ignores BUN_OPTIONS).
+export function withHook(start: string, lang: string) {
+  const at = Math.max(start.lastIndexOf('&&') + 1, start.lastIndexOf(';'));
+  const head = at > 0 ? start.slice(0, at + 1).trimEnd() + ' ' : '';
+  const last = start.slice(head.length).trimStart();
+  if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?start\b/.test(last)) return start; // the start script has it
+  if (/^node\s/.test(last)) return `${head}${last.replace(/^node\s+/, 'node --require vallkey/auto ')}`;
+  if (/^bun\s/.test(last))
+    return `${head}${last.replace(/^bun\s+(?:run\s+)?/, 'bun --preload vallkey/auto ')}`;
+  return `${head}${lang === 'bun' ? "BUN_OPTIONS='--preload vallkey/auto'" : "NODE_OPTIONS='--require vallkey/auto'"} ${last}`;
+}
+
+const hookedCommand = (command: string, lang: string) => {
+  if (command.includes('vallkey/auto')) return command;
+  if (lang !== 'ruby') return withHook(command, lang);
+  return /\bruby\s/.test(command)
+    ? command.replace(/\bruby\s/, 'ruby -rvallkey/auto ')
+    : `RUBYOPT=-rvallkey/auto ${command}`;
+};
+
+interface StartEdit {
+  file: string;
+  before: string;
+  after: string;
+}
+
+// Platforms often ignore package.json: a Procfile, a Dockerfile or the platform's own file
+// says what really runs. A hook added only to the start script would then never load, while
+// everything looks connected, so each of these is found and changed too.
+export async function startEdits(cwd: string, names: Set<string>, lang: string) {
+  const edits: StartEdit[] = [];
+  const warnings: string[] = [];
+  const read = (file: string) => (names.has(file) ? readFile(join(cwd, file), 'utf8') : '');
+  const flag = lang === 'bun' ? ['--preload', 'vallkey/auto'] : ['--require', 'vallkey/auto'];
+
+  // Every process, not only web: a worker holds keys too. release runs once, at deploy.
+  for (const m of (await read('Procfile')).matchAll(/^(?!release:)([\w-]+):[ \t]*(.+?)[ \t]*$/gm)) {
+    const after = hookedCommand(m[2], lang);
+    if (after !== m[2]) edits.push({ file: 'Procfile', before: m[0], after: `${m[1]}: ${after}` });
+  }
+  if (lang !== 'ruby') {
+    const quoted = /("startCommand"\s*:\s*)("(?:[^"\\]|\\.)*")/.exec(await read('railway.json'));
+    if (quoted) {
+      const command: string = JSON.parse(quoted[2]);
+      const after = hookedCommand(command, lang);
+      if (after !== command)
+        edits.push({ file: 'railway.json', before: quoted[0], after: quoted[1] + JSON.stringify(after) });
+    }
+    const toml = /^([ \t]*startCommand[ \t]*=[ \t]*)(["'])(.+?)\2[ \t]*$/m.exec(await read('railway.toml'));
+    if (toml) {
+      const after = hookedCommand(toml[3], lang);
+      if (after !== toml[3])
+        edits.push({
+          file: 'railway.toml',
+          before: toml[0],
+          after: `${toml[1]}${toml[2]}${after}${toml[2]}`,
+        });
+    }
+    for (const m of (await read('render.yaml')).matchAll(
+      /^([ \t]*(?:- )?startCommand:[ \t]*)(["']?)(.+?)\2[ \t]*$/gm,
+    )) {
+      const after = hookedCommand(m[3], lang);
+      if (after !== m[3])
+        edits.push({ file: 'render.yaml', before: m[0], after: `${m[1]}${m[2]}${after}${m[2]}` });
+    }
+    // What runs is the last ENTRYPOINT, or else the last CMD, of the final stage.
+    const docker = (await read('Dockerfile')).split(/^(?=\s*FROM\s)/im).pop() ?? '';
+    const runs = [...docker.matchAll(/^[ \t]*(ENTRYPOINT|CMD)[ \t]+(.+?)[ \t]*$/gim)];
+    const run = runs.filter((m) => /entrypoint/i.test(m[1])).pop() ?? runs.pop();
+    if (run && !run[2].includes('vallkey/auto')) {
+      let list: unknown = null;
+      try {
+        list = JSON.parse(run[2]);
+      } catch {
+        /* shell form */
+      }
+      if (Array.isArray(list)) {
+        if (list[0] === 'node' || list[0] === 'bun') {
+          const runtime = list[0] === 'bun' ? ['--preload', 'vallkey/auto'] : ['--require', 'vallkey/auto'];
+          const rest = list[0] === 'bun' && list[1] === 'run' ? list.slice(2) : list.slice(1);
+          const after = run[0].replace(run[2], JSON.stringify([list[0], ...runtime, ...rest]));
+          edits.push({ file: 'Dockerfile', before: run[0], after });
+        } else if (!(list.length > 1 && /^(npm|pnpm|yarn|bun)$/.test(list[0]) && /start$/.test(list.at(-1))))
+          warnings.push(
+            `Your Dockerfile runs ${list[0]}. Add this before it: ENV ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}="${flag.join(' ')}"`,
+          );
+      } else {
+        const after = hookedCommand(run[2], lang);
+        if (after !== run[2])
+          edits.push({ file: 'Dockerfile', before: run[0], after: run[0].replace(run[2], after) });
+      }
+    }
+    for (const file of ['ecosystem.config.js', 'ecosystem.config.cjs'])
+      if (names.has(file) && !(await read(file)).includes('vallkey/auto'))
+        warnings.push(`In ${file}, add to each app: node_args: '${flag.join(' ')}'`);
+  }
+  return { edits, warnings };
+}
+
+// Shows each change, or with consent makes it. False when one is still to do.
+async function applyStartEdits(cwd: string, names: Set<string>, lang: string, flags: Flags) {
+  const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+  const { edits, warnings } = await startEdits(cwd, names, lang);
+  let done = true;
+  for (const edit of edits) {
+    if (preview) {
+      out(`     In ${edit.file}:`);
+      out(`       ${cyan(edit.after.trim())}`);
+    } else if (await confirm(`  Change ${edit.file} to: ${edit.after.trim()}`, { yes: flags.yes })) {
+      const text = await readFile(join(cwd, edit.file), 'utf8');
+      await writeFile(
+        join(cwd, edit.file),
+        text.replace(edit.before, () => edit.after),
+      );
+      out(`  ${green('✓')} Updated ${edit.file}`);
+    } else done = false;
+  }
+  for (const warning of warnings) out(`  ${yellow('!')} ${warning}`);
+  return done && !warnings.length;
+}
+
+// Vercel functions have no start command, so the hook is a line in each one. A line that
+// goes after a shebang and any directive, which must stay first to mean anything.
+const FUNCTION = /\.(?:js|mjs|cjs|ts|mts|cts|rb)$/;
+async function functionFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(
+    entries
+      .filter((e) => !e.name.startsWith('_') && !e.name.startsWith('.') && !/\.d\.ts$/.test(e.name))
+      .map(async (e) => {
+        if (e.isDirectory()) return functionFiles(join(dir, e.name));
+        return FUNCTION.test(e.name) ? [join(dir, e.name)] : [];
+      }),
+  );
+  return files.flat();
+}
+
+export function withHookLine(file: string, text: string) {
+  const esm = /\.(?:mjs|ts|mts)$/.test(file) || /^\s*(?:import|export)\s/m.test(text);
+  const line = file.endsWith('.rb')
+    ? 'require "vallkey/auto"'
+    : esm
+      ? "import 'vallkey/auto';"
+      : "require('vallkey/auto');";
+  const head = /^(?:#!.*\n)?(?:(['"])use \w+\1;?[ \t]*\r?\n)*/.exec(text)?.[0] ?? '';
+  return `${head}${line}\n${text.slice(head.length)}`;
+}
+
 async function packageJson(cwd: string): Promise<ProjectPackage | null> {
   try {
     return JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8'));
@@ -111,6 +262,130 @@ function installCommand(lang: string, names: Set<string>) {
     return 'pip install vallkey';
   }
   return LANGUAGES[lang].install?.[0] ?? null;
+}
+
+// vallkey on a line of requirements.txt, and not vallkey-something.
+const LISTED = /^\s*vallkey(?![\w-])/im;
+
+// The project's own virtual environment, where pip has to install for the app to see it.
+async function venvPython(cwd: string) {
+  // An activated environment is the one the person is using, wherever it lives.
+  const dirs = [process.env.VIRTUAL_ENV, ...['.venv', 'venv', 'env'].map((d) => join(cwd, d))];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const bin of [join(dir, 'bin', 'python'), join(dir, 'Scripts', 'python.exe')])
+      if (await exists(bin)) return bin;
+  }
+  return null;
+}
+
+// Looks in the environment's folders and never runs its Python: doctor and previews are
+// read-only, and in a cloned project that interpreter could be anything.
+async function inEnvironment(py: string, name: RegExp) {
+  const root = resolve(py, '..', '..');
+  const versions = await readdir(join(root, 'lib')).catch(() => [] as string[]);
+  for (const site of [
+    join(root, 'Lib', 'site-packages'),
+    ...versions.map((v) => join(root, 'lib', v, 'site-packages')),
+  ])
+    if ((await readdir(site).catch(() => [] as string[])).some((entry) => name.test(entry))) return true;
+  return false;
+}
+
+// Whether the app can already load the package, so nothing needs installing.
+export async function installed(lang: string, cwd: string, names: Set<string>) {
+  if (lang === 'node' || lang === 'bun') {
+    try {
+      createRequire(join(cwd, 'package.json')).resolve('vallkey/auto');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (lang === 'python') {
+    // Listed for deploys, and present in the local environment when there is one.
+    const listed = names.has('requirements.txt')
+      ? LISTED.test(await readFile(join(cwd, 'requirements.txt'), 'utf8'))
+      : names.has('pyproject.toml') &&
+        /["']vallkey(?![\w-])/.test(await readFile(join(cwd, 'pyproject.toml'), 'utf8'));
+    const py = await venvPython(cwd);
+    return listed && (!py || (await inEnvironment(py, /^vallkey-.*\.dist-info$/)));
+  }
+  if (lang === 'ruby' && names.has('Gemfile.lock'))
+    return /^ {4}vallkey \(/m.test(await readFile(join(cwd, 'Gemfile.lock'), 'utf8'));
+  return false;
+}
+
+function runCommand(command: string, cwd: string) {
+  const [file, ...args] = command.split(' ');
+  // Fixed commands only (no user input), so a shell on Windows is safe and finds npm.cmd.
+  execFileSync(file, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+}
+
+// Step 1 of most setups: show the install command, or with consent run it.
+async function installStep(lang: string, cwd: string, names: Set<string>, flags: Flags) {
+  const command = installCommand(lang, names) ?? 'npm install vallkey';
+  if (await installed(lang, cwd, names)) {
+    out(`  1. ${green('✓')} The vallkey package is installed`);
+    return true;
+  }
+  // pip without a project environment: installing would go to the wrong Python.
+  const pip = lang === 'python' && command === 'pip install vallkey';
+  const py = pip ? await venvPython(cwd) : null;
+  // No terminal to ask in and no --yes (CI, scripts): show it, as before, and change nothing.
+  const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+  if (preview || (pip && !py && !names.has('requirements.txt'))) {
+    out(`  1. ${cyan(command)}`);
+    if (lang === 'python')
+      out(
+        dim(
+          '     Add vallkey to your project dependencies and install it in the virtual environment used by the app.',
+        ),
+      );
+    // A preview is complete as shown; otherwise this step is still to do.
+    return preview;
+  }
+  const doing = pip
+    ? [
+        names.has('requirements.txt') && 'add vallkey to requirements.txt',
+        py && `run pip install vallkey in ${relative(cwd, resolve(py, '../..'))}`,
+      ]
+        .filter(Boolean)
+        .join(' and ')
+    : `run ${command}`;
+  if (!(await confirm(`  Install the vallkey package: ${doing}?`, { yes: flags.yes }))) {
+    out(`  1. ${cyan(command)}`);
+    return false;
+  }
+  try {
+    if (pip) {
+      // Installed first: a failure leaves the project as it was.
+      if (py && (await inEnvironment(py, /^pip$/)))
+        execFileSync(py, ['-m', 'pip', 'install', 'vallkey'], { cwd, stdio: 'inherit' });
+      // Environments made by uv have no pip of their own.
+      else if (py)
+        execFileSync('uv', ['pip', 'install', '--python', py, 'vallkey'], { cwd, stdio: 'inherit' });
+      if (names.has('requirements.txt')) {
+        const text = await readFile(join(cwd, 'requirements.txt'), 'utf8');
+        if (!LISTED.test(text))
+          await appendFile(
+            join(cwd, 'requirements.txt'),
+            `${text && !text.endsWith('\n') ? '\n' : ''}vallkey\n`,
+          );
+      }
+    } else runCommand(command, cwd);
+  } catch {
+    throw new CliError(`Installing the vallkey package failed. Run it yourself: ${command}`);
+  }
+  out(`  1. ${green('✓')} Installed the vallkey package`);
+  // pip cannot edit pyproject.toml, and a deploy would not have the package without it.
+  if (pip && !names.has('requirements.txt'))
+    out(`     ${yellow('!')} Add vallkey to your project dependencies too, so deployed apps get it.`);
+  if (pip && !py && names.has('requirements.txt'))
+    out(
+      dim('     Added to requirements.txt. Install it where the app runs: pip install -r requirements.txt'),
+    );
+  return true;
 }
 
 export function phpFile({
@@ -274,7 +549,7 @@ export async function hook(args: string[], flags: Flags) {
       }
       const code =
         "export async function register() {\n  // Sends server requests that carry a ghost key to Vallkey.\n  if (process.env.NEXT_RUNTIME === 'nodejs') {\n    await import('vallkey/auto');\n  }\n}\n";
-      out(`  1. ${cyan(installCommand(lang, names))}`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (await exists(join(cwd, file))) {
         out(`  2. In ${file}, inside register(), when NEXT_RUNTIME is 'nodejs':`);
         out(`       ${cyan("await import('vallkey/auto');")}`);
@@ -308,11 +583,31 @@ export async function hook(args: string[], flags: Flags) {
         lang === 'ruby'
           ? 'require "vallkey/auto"'
           : `import 'vallkey/auto'   ${dim("// or require('vallkey/auto')")}`;
-      out(`  1. ${cyan(installCommand(lang, names) ?? 'npm install vallkey')}`);
-      out(
-        `  2. Make this the first line of each function${lang === 'ruby' ? ' (api/*.rb)' : ' (api/*.js, api/*.ts)'}:`,
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
+      const functions = (await functionFiles(join(cwd, 'api'))).filter((f) =>
+        lang === 'ruby' ? f.endsWith('.rb') : !f.endsWith('.rb'),
       );
-      out(`       ${cyan(line)}`);
+      const missing = [];
+      for (const file of functions)
+        if (!(await readFile(file, 'utf8')).includes('vallkey/auto')) missing.push(file);
+      const preview = Boolean(flags.print) || (!flags.yes && !process.stdin.isTTY);
+      if (functions.length && !missing.length) out(`  2. ${green('✓')} Each function loads auto-connect.`);
+      else if (
+        !preview &&
+        missing.length &&
+        (await confirm(`  Add auto-connect to the top of ${missing.length} function file(s) in api/?`, {
+          yes: flags.yes,
+        }))
+      ) {
+        for (const file of missing) await writeFile(file, withHookLine(file, await readFile(file, 'utf8')));
+        out(`  2. ${green('✓')} Added auto-connect to ${missing.length} function file(s)`);
+      } else {
+        if (!preview && missing.length) status = 1;
+        out(
+          `  2. Make this the first line of each function${lang === 'ruby' ? ' (api/*.rb)' : ' (api/*.js, api/*.ts)'}:`,
+        );
+        out(`       ${cyan(line)}`);
+      }
       out('  3. Redeploy.');
       out();
       detail('Not in Vercel variables: they also apply to the build, which then fails.');
@@ -325,13 +620,8 @@ export async function hook(args: string[], flags: Flags) {
     if (start && (lang === 'node' || lang === 'bun')) {
       const flag = lang === 'bun' ? '--preload vallkey/auto' : '--require vallkey/auto';
       const loaded = start.includes('vallkey/auto');
-      const runner = lang === 'bun' ? /^bun\s+(?:run\s+)?/ : /^node\s+/;
-      const updated = loaded
-        ? start
-        : runner.test(start)
-          ? start.replace(runner, `${lang} ${flag} `)
-          : `${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' ${start}`;
-      out(`  1. ${cyan(installCommand(lang, names))}`);
+      const updated = loaded ? start : withHook(start, lang);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
       if (loaded) {
         out(`  2. ${green('✓')} Your start script already turns on auto-connect.`);
       } else if (flags.print) {
@@ -361,10 +651,11 @@ export async function hook(args: string[], flags: Flags) {
       } else {
         status = 1;
       }
+      if (!(await applyStartEdits(cwd, names, lang, flags))) status = 1;
       out(`  3. Restart or redeploy the app.`);
       out();
       detail(
-        `Using Docker or your own server? Setting ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' where the app runs works too.`,
+        `Does your host run another command, from its dashboard for example? That one needs ${flag} too, or set ${lang === 'bun' ? 'BUN_OPTIONS' : 'NODE_OPTIONS'}='${flag}' where the app runs. vallkey verify shows if it worked.`,
       );
       detail(
         'Not in Railway, Render, Heroku or Vercel variables: they also apply to the build, which then fails.',
@@ -380,16 +671,12 @@ export async function hook(args: string[], flags: Flags) {
         ? /^web:\s*(.+)$/m.exec(await readFile(join(cwd, 'Procfile'), 'utf8'))?.[1]?.trim()
         : null;
     if (web) {
-      const updated = web.includes('vallkey/auto')
-        ? web
-        : /\bruby\s/.test(web)
-          ? web.replace(/\bruby\s/, 'ruby -rvallkey/auto ')
-          : `RUBYOPT=-rvallkey/auto ${web}`;
-      out(`  1. ${cyan(installCommand(lang, names))}`);
-      if (web === updated) out(`  2. ${green('✓')} Your Procfile already turns on auto-connect.`);
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
+      if (web.includes('vallkey/auto'))
+        out(`  2. ${green('✓')} Your Procfile already turns on auto-connect.`);
       else {
-        out('  2. Load it when your app starts. In your Procfile:');
-        out(`       ${cyan(`web: ${updated}`)}`);
+        out('  2. Load it when your app starts:');
+        if (!(await applyStartEdits(cwd, names, lang, flags))) status = 1;
       }
       out('  3. Restart or redeploy the app.');
       out();
@@ -403,9 +690,7 @@ export async function hook(args: string[], flags: Flags) {
     }
 
     let env: Record<string, string> = {};
-    const steps = [];
     const install = installCommand(lang, names);
-    if (install) steps.push(install);
     let docker: string[] = [];
 
     if (lang === 'php') {
@@ -518,16 +803,19 @@ export async function hook(args: string[], flags: Flags) {
     }
 
     let n = 1;
-    for (const step of steps) out(`  ${n++}. ${cyan(step)}`);
-    if (lang === 'python')
-      out(
-        dim(
-          '     Add vallkey to your project dependencies and install it in the virtual environment used by the app.',
-        ),
-      );
+    if (install) {
+      if (!(await installStep(lang, cwd, names, flags))) status = 1;
+      n++;
+    }
+    if ((lang === 'node' || lang === 'bun') && !(await applyStartEdits(cwd, names, lang, flags))) status = 1;
     if (env) {
       out(`  ${n++}. Set this in your app's environment (hosting dashboard, process manager or shell):`);
       for (const line of envLines(env)) out(`       ${cyan(line)}`);
+      if (api && lang === 'python') out(`       ${cyan(`VALLKEY_API=${api}`)}`);
+      // The installed vallkey 0.3 reads it when Python starts, before python-dotenv and
+      // similar load .env, so a value there is never seen.
+      if (lang === 'python')
+        out(dim('     Not in a .env file: Python reads it when it starts, before your app loads .env.'));
       // Variables that often hold other options already: add to them, do not replace them.
       if (
         Object.keys(env).some((k) =>
@@ -555,7 +843,7 @@ export async function hook(args: string[], flags: Flags) {
       out('     Or, in your Dockerfile:');
       for (const line of dockerEnv(env)) out(`       ${cyan(line)}`);
     }
-    if (api) out(`       ${cyan(`VALLKEY_API=${api}`)}`);
+    if (api && lang !== 'python') out(`       ${cyan(`VALLKEY_API=${api}`)}`);
     out(`  ${n}. Restart the app.`);
     out();
     if (lang === 'ruby' || lang === 'node' || lang === 'bun') {
@@ -569,9 +857,7 @@ export async function hook(args: string[], flags: Flags) {
   }
   // vallkey connect prints its own "Then check it".
   if (!flags.embedded && !status) {
-    next([
-      `After a request from your app: ${cyan('npx vallkey verify <key id> --request-id <x-guard-request-id>')}`,
-    ]);
+    next([`Restart your app, then ${cyan('npx vallkey verify')} and make one safe request`]);
   }
   return status;
 }

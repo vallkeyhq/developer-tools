@@ -16,7 +16,11 @@ public final class OkHttpAdvice {
         if (request == null) return;
         okhttp3.HttpUrl url = request.url();
         String[] t = Rewrite.decide(url.scheme(), url.host(), url.port(), url.encodedQuery(), request.headers().toMultimap());
-        if (t == null) return;
+        if (t == null) {
+            if (Rewrite.addressed(url.scheme(), url.host(), url.port(), url.encodedQuery(), request.headers().toMultimap()))
+                request = request.newBuilder().header(Rewrite.WHO_HEADER, Rewrite.who()).build();
+            return;
+        }
         okhttp3.HttpUrl moved = url.newBuilder().scheme(t[0]).host(t[1]).port(Integer.parseInt(t[2])).build();
         request = request.newBuilder().url(moved).removeHeader("Host").header(Rewrite.HOOK_HEADER, t[3]).header(Rewrite.WHO_HEADER, Rewrite.who()).build();
     }

@@ -63,6 +63,22 @@ curl_multi_add_handle($mh, $b);
 do { curl_multi_exec($mh, $running); curl_multi_select($mh, 0.1); } while ($running);
 check('curl_multi: a ghost key goes to Vallkey, the other request stays', json_decode(curl_multi_getcontent($a), true)['from'] === 'vallkey' && json_decode(curl_multi_getcontent($b), true)['from'] === 'provider');
 
+$ch = curl_init('http://127.0.0.1:18571/v1/tagged');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => '{}', CURLOPT_HTTPHEADER => ["Authorization: Bearer $ghost", 'X-Keep: 1']]);
+check('a request already addressed to Vallkey stays there', from($ch) === 'vallkey');
+$l = last();
+check('it says which app it is, and nothing else changes', $l['path'] === '/v1/tagged' && $l['body'] === '{}' && $l['from'] === null && str_starts_with((string) $l['hook'], 'php/'));
+check('sending the same handle again still works', from($ch) === 'vallkey' && str_starts_with((string) last()['hook'], 'php/'));
+$ch = curl_init('http://api.openai.com/v1/again');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => ["Authorization: Bearer $ghost"]]);
+from($ch);
+from($ch);
+check('a redirected handle sent again keeps the address it was for', last()['from'] === 'api.openai.com');
+$ch = curl_init('http://127.0.0.1:18571/v1/plain');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+from($ch);
+check('one without a ghost key is left alone', last()['hook'] === null);
+
 $debugCode = <<<'PHP'
 $c = curl_init('http://provider.example.invalid/sensitive-path-value?secret=private-query');
 curl_setopt_array($c, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5, CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . getenv('TEST_GHOST')]]);

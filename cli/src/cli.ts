@@ -23,13 +23,12 @@ const HELP = [
     ['scan [paths]', 'Find API keys in your code (exits with 1 if it finds any)'],
   ]),
   section('Connect your app', [
-    ['connect', 'Show the best way to connect this project. Changes nothing'],
     [
-      'hook [language]',
-      'Turn on auto-connect, no code changes: Node.js, Bun, Python, Ruby, Java, .NET, PHP, Elixir',
+      'connect [language]',
+      'Connect this project with no code changes. Asks before each change: Node.js, Bun, Python, Ruby, Java, .NET, PHP, Elixir',
     ],
     ['doctor', 'Check this project is ready on this computer'],
-    ['verify <key id>', 'Confirm one request from your deployed app went through Vallkey'],
+    ['verify', 'Wait for requests from your app and confirm they went through Vallkey'],
     ['status [key id]', 'Where each key is used, and what is wrong (exits with 1 if failing)'],
   ]),
   section('Keys', [
@@ -49,12 +48,12 @@ const HELP = [
     ['--json', 'Print JSON (scan, keys, status, doctor, verify)'],
     ['--api <url>', 'Use another Vallkey server'],
     ['init --dry-run', 'Show what would change, change nothing'],
-    ['hook --print', 'Only show what to do, download nothing'],
-    ['hook --dir <folder>', 'Where to put the auto-connect file (default .vallkey)'],
+    ['connect --print', 'Only show what to do, change nothing'],
+    ['connect --dir <folder>', 'Where to put the auto-connect file (default .vallkey)'],
     ['connect --method <name>', 'auto (default), address or hook'],
-    ['verify --request-id <id>', "The x-guard-request-id header from your app's response"],
+    ['verify --timeout <sec>', 'How long to wait for your app (default 120)'],
+    ['verify --request-id <id>', 'With a key id: check one exact request (x-guard-request-id)'],
     ['verify --expect <name>', 'allowed (default) or denied'],
-    ['verify --timeout <sec>', 'Wait up to 1 to 60 seconds (default 20)'],
     ['scan --history', 'Also look through every commit in git history'],
     ['scan --allowlist <file>', 'Exact path and SHA-256 exceptions for known false positives'],
     ['kill --reason "..."', 'Why, for the audit log'],
@@ -130,7 +129,7 @@ export async function main(argv: string[]) {
       return whoami(flags);
     case 'init':
       return init(rest, flags);
-    case 'hook':
+    case 'hook': // the former name of connect's setup step, kept for existing docs
       return hook(rest, flags);
     case 'connect':
       return connect(rest, flags);

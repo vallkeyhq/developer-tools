@@ -195,6 +195,182 @@ class AutoTest(unittest.TestCase):
         self.assertEqual(out, "vallkey provider")
         self.assertTrue(any(s["path"] == "/emails" and s["server"] == "vallkey" for s in SEEN))
 
+    def test_names_the_app_on_ghost_key_requests_already_addressed_to_vallkey(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, json, os, urllib.request
+            api = os.environ['VALLKEY_API']
+            send = lambda path, headers: json.load(urllib.request.urlopen(urllib.request.Request(api + path, data=b'{}', headers=headers)))['from']
+            print(send('/v1/tagged', {'Authorization': 'Bearer ' + os.environ['GHOST']}), send('/v1/plain', {'Authorization': 'Bearer sk-real'}))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        tagged = next(s for s in SEEN if s["path"] == "/v1/tagged")
+        plain = next(s for s in SEEN if s["path"] == "/v1/plain")
+        self.assertRegex(tagged["hook"], r"^python/")
+        self.assertIsNone(tagged["from"])
+        self.assertEqual(tagged["body"], "{}")
+        self.assertIsNone(plain["hook"])
+
+    @unittest.skipUnless(has("requests") and has("httpx"), "requests and httpx are not installed")
+    def test_names_the_app_through_requests_and_httpx(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, os, httpx, requests
+            api = os.environ['VALLKEY_API']
+            headers = {'Authorization': 'Bearer ' + os.environ['GHOST']}
+            print(requests.get(api + '/v1/via-requests', headers=headers).json()['from'], httpx.get(api + '/v1/via-httpx', headers=headers).json()['from'])
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        for path in ("/v1/via-requests", "/v1/via-httpx"):
+            entry = next(s for s in SEEN if s["path"] == path)
+            self.assertRegex(entry["hook"], r"^python/")
+            self.assertIsNone(entry["from"])
+
+    @unittest.skipUnless(has("botocore"), "botocore is not installed")
+    def test_botocore_goes_to_vallkey_and_names_the_app_when_already_there(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, json, os
+            from botocore.awsrequest import AWSRequest
+            from botocore.httpsession import URLLib3Session
+            headers = {'Authorization': 'AWS4-HMAC-SHA256 Credential=' + os.environ['GHOST'] + '/20261031/us-east-1/s3/aws4_request'}
+            send = lambda url: json.loads(URLLib3Session().send(AWSRequest(method='GET', url=url, headers=headers).prepare()).content)['from']
+            print(send('https://s3.us-east-1.amazonaws.com/bucket/moved'), send(os.environ['VALLKEY_API'] + '/bucket/tagged'))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        moved = next(s for s in SEEN if s["path"] == "/bucket/moved")
+        tagged = next(s for s in SEEN if s["path"] == "/bucket/tagged")
+        self.assertEqual(moved["from"], "s3.us-east-1.amazonaws.com")
+        self.assertRegex(moved["hook"], r"^python/")
+        self.assertIsNone(tagged["from"])
+        self.assertRegex(tagged["hook"], r"^python/")
+
+    @unittest.skipUnless(has("urllib3") and has("aiohttp"), "urllib3 and aiohttp are not installed")
+    def test_names_the_app_through_urllib3_and_aiohttp(self):
+        out, _ = self.run_py(
+            """
+            import vallkey.auto, asyncio, os, aiohttp, urllib3
+            api = os.environ['VALLKEY_API']
+            headers = {'Authorization': 'Bearer ' + os.environ['GHOST']}
+            async def main():
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(api + '/v1/via-aiohttp', headers=headers) as r:
+                        return (await r.json())['from']
+            print(urllib3.PoolManager().request('GET', api + '/v1/via-urllib3', headers=headers).json()['from'], asyncio.run(main()))
+            """
+        )
+        self.assertEqual(out, "vallkey vallkey")
+        for path in ("/v1/via-urllib3", "/v1/via-aiohttp"):
+            entry = next(s for s in SEEN if s["path"] == path)
+            self.assertRegex(entry["hook"], r"^python/")
+            self.assertIsNone(entry["from"])
+
+    # Installing the package puts vallkey_auto.pth in site-packages; site.addsitedir runs
+    # it the same way Python does at start, before any of the app's code.
+    INSTALLED = """
+        import json, os, site, sys
+        site.addsitedir(os.environ['PYTHONPATH'])
+        import urllib.request
+        ghost = lambda: urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+        plain = lambda: urllib.request.Request('%s/plain', headers={'Authorization': 'Bearer sk-real'})
+        send = lambda req: json.load(urllib.request.urlopen(req))['from']
+        """
+
+    def installed(self, tail):
+        return textwrap.dedent(self.INSTALLED % (self.provider_url, self.provider_url)) + tail
+
+    def test_installed_package_is_on_with_no_import_or_variable(self):
+        out, _ = self.run_py(self.installed("print(send(ghost()), send(plain()))\n"))
+        self.assertEqual(out, "vallkey provider")
+
+    def test_starting_python_loads_nothing_until_a_client_is_imported(self):
+        out, _ = self.run_py(
+            """
+            import os, site, sys
+            site.addsitedir(os.environ['PYTHONPATH'])
+            before = 'vallkey._patch' in sys.modules
+            import json
+            middle = 'vallkey._patch' in sys.modules
+            import urllib.request
+            print(before, middle, 'vallkey._patch' in sys.modules)
+            """
+        )
+        self.assertEqual(out, "False False True")
+
+    def test_a_client_loaded_before_the_package_starts_is_covered(self):
+        out, _ = self.run_py(
+            """
+            import json, os, site, urllib.request
+            site.addsitedir(os.environ['PYTHONPATH'])
+            req = urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+            print(json.load(urllib.request.urlopen(req))['from'])
+            """
+            % self.provider_url
+        )
+        self.assertEqual(out, "vallkey")
+
+    def test_uninstall_before_any_client_stays_uninstalled(self):
+        out, _ = self.run_py(
+            """
+            import json, os, site
+            site.addsitedir(os.environ['PYTHONPATH'])
+            import vallkey
+            vallkey.uninstall()
+            import urllib.request
+            req = urllib.request.Request('%s/x', headers={'Authorization': 'Bearer ' + os.environ['GHOST']})
+            print(json.load(urllib.request.urlopen(req))['from'])
+            """
+            % self.provider_url
+        )
+        self.assertEqual(out, "provider")
+
+    def test_clients_imported_at_once_from_threads_are_all_covered(self):
+        out, _ = self.run_py(
+            """
+            import os, site, threading, sys
+            site.addsitedir(os.environ['PYTHONPATH'])
+            names = ['urllib.request', 'requests', 'urllib3', 'httpx']
+            barrier = threading.Barrier(len(names))
+            def load(name):
+                barrier.wait()
+                try:
+                    __import__(name)
+                except ImportError:
+                    pass
+            threads = [threading.Thread(target=load, args=(n,)) for n in names]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+            import vallkey._patch as p
+            print('urllib.request' in p._PATCHERS, not any(getattr(f, '_vallkey_lazy', False) for f in sys.meta_path), hasattr(sys.modules['urllib.request'].AbstractHTTPHandler.do_open, '_vallkey'))
+            """
+        )
+        self.assertEqual(out, "True True True")
+
+    def test_the_watched_list_matches_what_is_patched(self):
+        out, _ = self.run_py(
+            """
+            import vallkey._patch as p, vallkey._startup as s
+            print(sorted(p._PATCHERS) == sorted(s.WATCHED))
+            """
+        )
+        self.assertEqual(out, "True")
+
+    def test_vallkey_auto_0_turns_it_off_at_start(self):
+        out, _ = self.run_py(self.installed("print(send(ghost()))\n"), VALLKEY_AUTO="0")
+        self.assertEqual(out, "provider")
+
+    def test_vallkey_auto_0_from_a_env_file_loaded_later_turns_it_off(self):
+        # python-dotenv and similar load .env after Python started, after the .pth ran.
+        out, _ = self.run_py(
+            self.installed(
+                "a = send(ghost())\nos.environ['VALLKEY_AUTO'] = '0'\nb = send(ghost())\nos.environ['VALLKEY_AUTO'] = '1'\nprint(a, b, send(ghost()))\n"
+            )
+        )
+        self.assertEqual(out, "vallkey provider vallkey")
+
     def test_debug_log_never_shows_the_key_and_uninstall_undoes_it(self):
         out, err = self.run_py(
             """

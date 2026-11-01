@@ -88,6 +88,14 @@ finally
 var debugText = debugLog.ToString();
 Check("debug logs omit paths, queries and credentials", debugText.Contains("https://api.openai.com ->") && !debugText.Contains("sensitive-path-value") && !debugText.Contains("private-query") && !debugText.Contains(ghost));
 
+var addressed = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{vport}/v1/tagged") { Content = new StringContent("{}") };
+addressed.Headers.Authorization = new("Bearer", ghost);
+await http.SendAsync(addressed);
+var tagged = seen.Last();
+Check("a request already addressed to Vallkey says which app it is, and nothing else changes", tagged.Path == "/v1/tagged" && tagged.Body == "{}" && tagged.From is null && tagged.Hook?.StartsWith("dotnet/") == true);
+await http.GetAsync($"http://127.0.0.1:{vport}/v1/plain");
+Check("one without a ghost key is left alone", seen.Last().Hook is null);
+
 Vallkey.Auto.Hook.Uninstall();
 var off = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{pport}/off");
 off.Headers.Authorization = new("Bearer", ghost);

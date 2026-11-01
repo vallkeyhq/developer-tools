@@ -1,4 +1,10 @@
-import type { ClientRequest, IncomingHttpHeaders, IncomingMessage, RequestOptions } from 'node:http';
+import type {
+  ClientRequest,
+  IncomingHttpHeaders,
+  IncomingMessage,
+  OutgoingHttpHeaders,
+  RequestOptions,
+} from 'node:http';
 import type { RequestOptions as HttpsOptions } from 'node:https';
 type Protocol = 'http:' | 'https:';
 type Target = { protocol: string; hostname: string; port: string; host: string };
@@ -12,11 +18,27 @@ const INSTALLED = Symbol.for('vallkey.auto');
 const env = (name: string) => (typeof process !== 'undefined' && process.env ? process.env[name] : undefined);
 
 let configuredTarget: Target | undefined;
+let configuredFrom: string | undefined;
+// Read on every request, as the other hooks do: dotenv and similar load .env after this
+// file starts, so a custom domain set there would otherwise be ignored.
 function target() {
-  if (configuredTarget) return configuredTarget;
+  const raw = env('VALLKEY_API') || 'https://api.vallkey.com';
+  if (configuredTarget && raw === configuredFrom) return configuredTarget;
+  configuredFrom = raw;
+  try {
+    configuredTarget = parseTarget(raw);
+  } catch (error) {
+    // At startup this stops the app; later, one bad value must not break every request.
+    if (!configuredTarget) throw error;
+    console.error('Vallkey: VALLKEY_API changed to an invalid value and was ignored.');
+  }
+  return configuredTarget;
+}
+
+function parseTarget(raw: string): Target {
   let url;
   try {
-    url = new URL(env('VALLKEY_API') || 'https://api.vallkey.com');
+    url = new URL(raw);
   } catch {
     throw new Error('Vallkey: VALLKEY_API must be an HTTPS origin.');
   }
@@ -33,8 +55,7 @@ function target() {
       'Vallkey: VALLKEY_API must be an HTTPS origin without credentials, path, query or fragment (HTTP is allowed for loopback tests).',
     );
   }
-  configuredTarget = { protocol: url.protocol, hostname: url.hostname, port: url.port, host: url.host };
-  return configuredTarget;
+  return { protocol: url.protocol, hostname: url.hostname, port: url.port, host: url.host };
 }
 
 // Keep platform precedence consistent across runtime hooks.
@@ -205,16 +226,29 @@ function patchFetch() {
     input: RequestInfo | URL,
     init?: RequestInit,
   ) {
+    // Read on every request, so a .env file loaded after start can still turn it off.
+    if (env('VALLKEY_AUTO') === '0') return original.call(this, input, init);
     let protectedRequest = false;
     try {
       const isRequest = typeof Request !== 'undefined' && input instanceof Request;
       const url = new URL(isRequest ? input.url : String(input instanceof URL ? input.href : input));
+      const headers =
+        init && init.headers !== undefined ? init.headers : isRequest ? input.headers : undefined;
+      // Already addressed to Vallkey by an SDK's address setting: say which app it is, so
+      // one app is one place on the dashboard however each SDK reaches Vallkey.
+      if (
+        (url.protocol === 'https:' || url.protocol === 'http:') &&
+        isVallkey(url.hostname, url.port, url.protocol) &&
+        hasGhost(url, headers, init && init.body)
+      ) {
+        const tagged = new Headers(headers);
+        tagged.set('x-vallkey-hook', hookValue());
+        return original.call(this, input, { ...init, headers: tagged });
+      }
       if (
         (url.protocol === 'https:' || url.protocol === 'http:') &&
         !isVallkey(url.hostname, url.port, url.protocol)
       ) {
-        const headers =
-          init && init.headers !== undefined ? init.headers : isRequest ? input.headers : undefined;
         // init.headers replaces Request headers; discarded headers must not cause routing.
         if (
           hasGhost(url, headers, init && init.body) ||
@@ -293,6 +327,10 @@ function patchNode() {
 
   function make(defaultProtocol: Protocol) {
     return function request(...args: NodeArguments): ClientRequest {
+      if (env('VALLKEY_AUTO') === '0') {
+        const untouched = originals[defaultProtocol].request as (...args: NodeArguments) => ClientRequest;
+        return untouched.apply(originals[defaultProtocol].mod, args);
+      }
       let protectedRequest = false;
       try {
         const { url, options, cb } = split(args);
@@ -353,6 +391,21 @@ function patchNode() {
           const o = originals[t.protocol === 'http:' ? 'http:' : 'https:'];
           const send = o.request as (options: RequestOptions, callback?: NodeCallback) => ClientRequest;
           return send.call(o.mod, next, cb);
+        }
+        // Already addressed to Vallkey: only say which app it is (see patchFetch).
+        if (
+          isVallkey(hostname, port, protocol) &&
+          (hasGhost({ search }, options.headers) || GHOST.test(String(credentials)))
+        ) {
+          const raw = options.headers ?? {};
+          const headers: OutgoingHttpHeaders = {};
+          if (Array.isArray(raw)) for (let n = 0; n + 1 < raw.length; n += 2) headers[raw[n]] = raw[n + 1];
+          else Object.assign(headers, raw);
+          headers['x-vallkey-hook'] = hookValue();
+          const tagged = { ...options, headers };
+          const o = originals[defaultProtocol];
+          const send = o.request as (...args: NodeArguments) => ClientRequest;
+          return url ? send.call(o.mod, url, tagged, cb) : send.call(o.mod, tagged, cb);
         }
       } catch {
         if (protectedRequest)

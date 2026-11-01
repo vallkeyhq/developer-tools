@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,19 @@ async function run(args, options = {}) {
   }
 }
 
+// Stand-ins for npm and a project's Python, recording what they were asked to do, so
+// installing never reaches a package registry.
+async function fakeTools(dir) {
+  const bin = join(dir, '.fake-bin');
+  const log = join(dir, '.fake-log');
+  await mkdir(bin, { recursive: true });
+  const script = `#!/bin/sh\necho "$(basename "$0") $*" >> "${log}"\n[ "$1" = "-c" ] && exit 1\nexit 0\n`;
+  await writeFile(join(bin, 'npm'), script);
+  await chmod(join(bin, 'npm'), 0o755);
+  return { path: `${bin}:${process.env.PATH}`, log: () => readFile(log, 'utf8').catch(() => '') };
+}
+const project = async (cwd) => (await readdir(cwd)).filter((n) => !n.startsWith('.fake')).sort();
+
 test('connect chooses known address settings without modifying the project', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-'));
   try {
@@ -40,10 +53,12 @@ test('connect chooses known address settings without modifying the project', asy
     assert.deepEqual(await readdir(cwd), ['package.json']);
     const existing = 'export async function register() { /* existing telemetry */ }';
     await writeFile(join(cwd, 'instrumentation.js'), existing);
-    const again = await run(['hook', '--yes'], { cwd });
+    const tools = await fakeTools(cwd);
+    const again = await run(['hook', '--yes'], { cwd, env: { PATH: tools.path } });
     assert.equal(again.code, 0, again.stderr);
     assert.match(again.stdout, /In instrumentation.js/);
-    assert.deepEqual((await readdir(cwd)).sort(), ['instrumentation.js', 'package.json']);
+    assert.equal(await tools.log(), 'npm install vallkey\n');
+    assert.deepEqual(await project(cwd), ['instrumentation.js', 'package.json']);
     await writeFile(
       join(cwd, 'package.json'),
       JSON.stringify({ dependencies: { stripe: '20', next: '16' } }),
@@ -52,9 +67,292 @@ test('connect chooses known address settings without modifying the project', asy
     assert.equal(hook.code, 0, hook.stderr);
     assert.match(hook.stdout, /In instrumentation.js/);
     assert.match(hook.stdout, /VALLKEY_API=https:\/\/api-staging.vallkey.com/);
-    assert.deepEqual((await readdir(cwd)).sort(), ['instrumentation.js', 'package.json']);
+    assert.deepEqual(await project(cwd), ['instrumentation.js', 'package.json']);
     assert.equal(await readFile(join(cwd, 'instrumentation.js'), 'utf8'), existing);
   } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect sets up the project with --yes, and only shows the steps without a terminal', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-apply-'));
+  try {
+    const pkg = JSON.stringify({ scripts: { start: 'node app.js' }, dependencies: { stripe: '20' } });
+    await writeFile(join(cwd, 'package.json'), pkg);
+    const tools = await fakeTools(cwd);
+    const shown = await run(['connect'], { cwd, env: { PATH: tools.path } });
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /npm install vallkey/);
+    assert.match(shown.stdout, /Run it in a terminal, or with --yes, to set it up/);
+    assert.equal(await tools.log(), '');
+    assert.equal(await readFile(join(cwd, 'package.json'), 'utf8'), pkg);
+
+    const done = await run(['connect', '--yes'], { cwd, env: { PATH: tools.path } });
+    assert.equal(done.code, 0, done.stderr);
+    assert.equal(await tools.log(), 'npm install vallkey\n');
+    assert.match(done.stdout, /Installed the vallkey package/);
+    assert.equal(
+      JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')).scripts.start,
+      'node --require vallkey/auto app.js',
+    );
+    assert.match(done.stdout, /npx vallkey verify/);
+    assert.doesNotMatch(done.stdout, /Nothing in your project was changed/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect adds vallkey to requirements.txt and installs it in the project environment', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-py-'));
+  try {
+    await writeFile(join(cwd, 'requirements.txt'), 'stripe');
+    const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    await mkdir(join(cwd, '.venv', 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
+    await writeFile(
+      join(cwd, '.venv', 'bin', 'python'),
+      await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'),
+    );
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    const r = await run(['connect', 'python', '--yes'], { cwd, env: { PATH: tools.path, VIRTUAL_ENV: '' } });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\nvallkey\n');
+    assert.equal(await tools.log(), 'python -m pip install vallkey\n');
+    assert.match(r.stdout, /Installed the vallkey package/);
+    assert.match(r.stdout, /Not in a \.env file/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect finds an activated environment outside the project, and not a look-alike name', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vallkey-venv-'));
+  const cwd = join(root, 'app');
+  const outside = join(root, 'envs', 'app');
+  try {
+    await mkdir(cwd);
+    await writeFile(join(cwd, 'requirements.txt'), 'vallkey-tools\n');
+    const tools = await fakeTools(root);
+    await mkdir(join(outside, 'bin'), { recursive: true });
+    await mkdir(join(outside, 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
+    await writeFile(join(outside, 'bin', 'python'), await readFile(join(root, '.fake-bin', 'npm'), 'utf8'));
+    await chmod(join(outside, 'bin', 'python'), 0o755);
+    const r = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: outside },
+    });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'vallkey-tools\nvallkey\n');
+    assert.match(await tools.log(), /python -m pip install vallkey/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('read-only commands never run the Python in a project folder', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-untrusted-'));
+  try {
+    await writeFile(join(cwd, 'requirements.txt'), 'vallkey\n');
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    const marker = join(cwd, 'ran');
+    await writeFile(join(cwd, '.venv', 'bin', 'python'), `#!/bin/sh\ntouch "${marker}"\n`);
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    const env = { VIRTUAL_ENV: '' };
+    for (const args of [
+      ['doctor'],
+      ['doctor', '--json'],
+      ['connect'],
+      ['connect', '--print'],
+      ['hook', '--print'],
+    ]) {
+      const r = await run(args, { cwd, env });
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.ok(!(await readdir(cwd)).includes('ran'), `${args.join(' ')} ran the project's Python`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect uses uv in an environment without pip, and a failed install changes nothing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-uv-'));
+  try {
+    await writeFile(join(cwd, 'requirements.txt'), 'stripe\n');
+    const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    await writeFile(join(cwd, '.venv', 'bin', 'python'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    await writeFile(join(cwd, '.fake-bin', 'uv'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(cwd, '.fake-bin', 'uv'), 0o755);
+    const failed = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: '' },
+    });
+    assert.equal(failed.code, 1);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\n');
+    await writeFile(join(cwd, '.fake-bin', 'uv'), await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'));
+    await chmod(join(cwd, '.fake-bin', 'uv'), 0o755);
+    const done = await run(['connect', 'python', '--yes'], {
+      cwd,
+      env: { PATH: tools.path, VIRTUAL_ENV: '' },
+    });
+    assert.equal(done.code, 0, done.stdout + done.stderr);
+    assert.match(await tools.log(), /^uv pip install --python \S+ vallkey\n$/);
+    assert.equal(await readFile(join(cwd, 'requirements.txt'), 'utf8'), 'stripe\nvallkey\n');
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect says when a pyproject.toml project still needs the dependency added', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-pyproject-'));
+  try {
+    await writeFile(join(cwd, 'pyproject.toml'), '[project]\nname = "app"\n');
+    const tools = await fakeTools(cwd);
+    await mkdir(join(cwd, '.venv', 'lib', 'python3.12', 'site-packages', 'pip'), { recursive: true });
+    await mkdir(join(cwd, '.venv', 'bin'), { recursive: true });
+    await writeFile(
+      join(cwd, '.venv', 'bin', 'python'),
+      await readFile(join(cwd, '.fake-bin', 'npm'), 'utf8'),
+    );
+    await chmod(join(cwd, '.venv', 'bin', 'python'), 0o755);
+    const r = await run(['connect', 'python', '--yes'], { cwd, env: { PATH: tools.path, VIRTUAL_ENV: '' } });
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /Add vallkey to your project dependencies too/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect changes what the platform really runs, and doctor reports what it left', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-platform-'));
+  try {
+    await mkdir(join(cwd, 'node_modules', 'vallkey'), { recursive: true });
+    await writeFile(
+      join(cwd, 'node_modules', 'vallkey', 'package.json'),
+      '{"name":"vallkey","exports":{"./auto":"./auto.js"}}',
+    );
+    await writeFile(join(cwd, 'node_modules', 'vallkey', 'auto.js'), '');
+    await writeFile(join(cwd, 'package.json'), '{"scripts":{"start":"node app.js"}}');
+    const procfile = 'web: node app.js\n';
+    await writeFile(join(cwd, 'Procfile'), procfile);
+    await writeFile(join(cwd, 'Dockerfile'), 'FROM node:22\nCMD ["node", "app.js"]\n');
+    await writeFile(join(cwd, 'ecosystem.config.js'), 'module.exports = {}\n');
+    const doctor = JSON.parse((await run(['doctor', '--json'], { cwd })).stdout).checks.filter(
+      (c) => c.status === 'warning',
+    );
+    assert.deepEqual(doctor.length, 3);
+    assert.match(doctor[0].message, /Procfile starts your app without auto-connect/);
+    const shown = await run(['connect'], { cwd });
+    assert.match(shown.stdout, /web: node --require vallkey\/auto app\.js/);
+    assert.equal(await readFile(join(cwd, 'Procfile'), 'utf8'), procfile);
+    const done = await run(['connect', '--yes'], { cwd });
+    assert.equal(done.code, 1, 'pm2 still needs a hand edit');
+    assert.match(done.stdout, /node_args/);
+    assert.equal(await readFile(join(cwd, 'Procfile'), 'utf8'), 'web: node --require vallkey/auto app.js\n');
+    assert.equal(
+      await readFile(join(cwd, 'Dockerfile'), 'utf8'),
+      'FROM node:22\nCMD ["node","--require","vallkey/auto","app.js"]\n',
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('connect adds auto-connect to Vercel functions, and does it once', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-connect-vercel-'));
+  try {
+    await mkdir(join(cwd, 'node_modules', 'vallkey'), { recursive: true });
+    await writeFile(
+      join(cwd, 'node_modules', 'vallkey', 'package.json'),
+      '{"name":"vallkey","exports":{"./auto":"./auto.js"}}',
+    );
+    await writeFile(join(cwd, 'node_modules', 'vallkey', 'auto.js'), '');
+    await writeFile(join(cwd, 'package.json'), '{}');
+    await writeFile(join(cwd, 'vercel.json'), '{}');
+    await mkdir(join(cwd, 'api', 'nested'), { recursive: true });
+    await writeFile(join(cwd, 'api', 'a.js'), "import s from 'stripe';\n");
+    await writeFile(join(cwd, 'api', 'nested', 'b.ts'), 'export default 1;\n');
+    await writeFile(join(cwd, 'api', '_helper.js'), 'module.exports = 1;\n');
+    const shown = await run(['connect'], { cwd });
+    assert.match(shown.stdout, /first line of each function/);
+    assert.equal(await readFile(join(cwd, 'api', 'a.js'), 'utf8'), "import s from 'stripe';\n");
+    const done = await run(['connect', '--yes'], { cwd });
+    assert.equal(done.code, 0, done.stdout + done.stderr);
+    assert.match(done.stdout, /Added auto-connect to 2 function file/);
+    assert.equal(
+      await readFile(join(cwd, 'api', 'a.js'), 'utf8'),
+      "import 'vallkey/auto';\nimport s from 'stripe';\n",
+    );
+    assert.equal(await readFile(join(cwd, 'api', '_helper.js'), 'utf8'), 'module.exports = 1;\n');
+    const again = await run(['connect', '--yes'], { cwd });
+    assert.match(again.stdout, /Each function loads auto-connect/);
+    assert.equal((await readFile(join(cwd, 'api', 'a.js'), 'utf8')).match(/vallkey\/auto/g).length, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('verify with no arguments waits for requests with the project ghost keys', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'vallkey-watch-'));
+  const ghost = `gk_openai_${key}_${'B'.repeat(43)}`;
+  let activity = [];
+  let denied = false;
+  const server = createServer((req, res) => {
+    assert.equal(req.headers.authorization, 'Bearer test-management');
+    if (denied)
+      return res
+        .writeHead(401, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ error: { code: 'unauthorized', message: 'invalid token' } }));
+    const url = new URL(req.url, 'http://localhost');
+    assert.equal(url.pathname, `/_guard/v1/keys/${key}/activity`);
+    assert.ok(Number(url.searchParams.get('from')) > 0);
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ activity }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const env = { VALLKEY_API: `http://127.0.0.1:${server.address().port}`, VALLKEY_TOKEN: 'test-management' };
+  try {
+    await writeFile(join(cwd, '.env'), `OPENAI_API_KEY=${ghost}\n`);
+    const none = await run(['verify', '--timeout', '1'], { cwd, env });
+    assert.equal(none.code, 1);
+    assert.match(none.stdout, /OPENAI_API_KEY\s+no request yet/);
+    assert.match(none.stdout, /No request reached Vallkey[\s\S]*npx vallkey connect/);
+
+    activity = [
+      {
+        requestId: 'r1',
+        at: Date.now(),
+        outcome: 'allowed',
+        status: 200,
+        method: 'POST',
+        path: '/v1/chat/completions',
+      },
+    ];
+    const seen = await run(['verify', '--timeout', '5'], { cwd, env });
+    assert.equal(seen.code, 0, seen.stdout + seen.stderr);
+    assert.match(seen.stdout, /OPENAI_API_KEY\s+POST \/v1\/chat\/completions\s+200/);
+    assert.match(seen.stdout, /Your app is connected/);
+
+    activity = [
+      { requestId: 'r2', at: Date.now(), outcome: 'allowed', status: 401, method: 'GET', path: '/v1/models' },
+    ];
+    const json = JSON.parse((await run(['verify', '--timeout', '5', '--json'], { cwd, env })).stdout);
+    assert.equal(json.verified, false);
+    assert.deepEqual(
+      [json.keys[0].names, json.keys[0].connected, json.keys[0].status],
+      [['OPENAI_API_KEY'], true, 401],
+    );
+    await rm(join(cwd, '.env'));
+    assert.match((await run(['verify'], { cwd, env })).stderr, /Run vallkey init first/);
+    await writeFile(join(cwd, '.env'), `OPENAI_API_KEY=${ghost}\n`);
+    denied = true;
+    const started = Date.now();
+    const refused = await run(['verify', '--timeout', '30'], { cwd, env });
+    assert.equal(refused.code, 1);
+    assert.ok(Date.now() - started < 10_000, 'a refused token does not wait for the timeout');
+    assert.doesNotMatch(refused.stdout, /No request reached Vallkey/);
+  } finally {
+    server.close();
     await rm(cwd, { recursive: true, force: true });
   }
 });
