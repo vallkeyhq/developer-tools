@@ -6,7 +6,14 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { detect, phpFile, startEdits, withHook, withHookLine } from '../dist/src/commands/hook.js';
+import {
+  detect,
+  phpFile,
+  pythonHead,
+  startEdits,
+  withHook,
+  withHookLine,
+} from '../dist/src/commands/hook.js';
 
 const BIN = new URL('../dist/bin/vallkey.js', import.meta.url).pathname;
 const MANIFEST = JSON.parse(await readFile(new URL('../dist/src/hooks.json', import.meta.url), 'utf8'));
@@ -388,5 +395,94 @@ describe('vallkey hook', () => {
     const r = await run(['hook'], { cwd: await make({ 'go.mod': 'module x' }) });
     assert.equal(r.code, 0);
     assert.match(r.stdout, /Go\s+no auto-connect/);
+  });
+});
+
+describe('Python on AWS Lambda', () => {
+  const sam = (handler, extra = '') =>
+    `Resources:\n  Fn:\n    Type: AWS::Serverless::Function\n    Properties:\n${extra}      Handler: ${handler}\n      Runtime: python3.12\n`;
+  const inProject = async (files, use) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'vallkey-lambda-'));
+    try {
+      for (const [name, text] of Object.entries(files)) {
+        await mkdir(join(cwd, name, '..'), { recursive: true });
+        await writeFile(join(cwd, name), text);
+      }
+      return await use(cwd, new Set(await readdir(cwd)));
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  };
+  const edited = async (files) =>
+    inProject(files, async (cwd, names) => (await startEdits(cwd, names, 'python')).edits.map((e) => e.file));
+
+  it('finds the handler a template names, with or without CodeUri', async () => {
+    assert.deepEqual(await edited({ 'template.yaml': sam('app.handler'), 'app.py': 'import stripe\n' }), [
+      'app.py',
+    ]);
+    assert.deepEqual(
+      await edited({
+        'template.yml': sam('app.lambda_handler', '      CodeUri: src/\n'),
+        'src/app.py': 'import stripe\n',
+      }),
+      [join('src', 'app.py')],
+    );
+    assert.deepEqual(
+      await edited({
+        'serverless.yml': 'provider:\n  runtime: python3.12\nfunctions:\n  a:\n    handler: pkg.mod.run\n',
+        'pkg/mod.py': '',
+      }),
+      [join('pkg', 'mod.py')],
+    );
+  });
+
+  it('leaves alone what already imports it, and other runtimes', async () => {
+    for (const source of ['import vallkey.auto\nimport stripe\n', '"""Doc."""\nfrom vallkey import auto\n'])
+      assert.deepEqual(await edited({ 'template.yaml': sam('app.handler'), 'app.py': source }), []);
+    const node = sam('app.handler').replace('python3.12', 'nodejs22.x');
+    assert.deepEqual(await edited({ 'template.yaml': node, 'app.py': '' }), []);
+  });
+
+  it('says what to add when it cannot find the handler, and never leaves the project', async () => {
+    const { edits, warnings } = await inProject(
+      { 'template.yaml': sam('app.handler', '      CodeUri: ../other/\n') },
+      (cwd, names) => startEdits(cwd, names, 'python'),
+    );
+    assert.deepEqual(edits, []);
+    assert.match(warnings[0], /first line of your handler file: import vallkey\.auto/);
+  });
+
+  it('keeps a docstring and __future__ imports first', () => {
+    assert.equal(pythonHead('import stripe\n'), '');
+    assert.equal(pythonHead('#!/usr/bin/env python\nimport os\n'), '#!/usr/bin/env python\n');
+    assert.equal(pythonHead('"""Doc.\n\nMore.\n"""\nimport os\n'), '"""Doc.\n\nMore.\n"""\n');
+    assert.equal(
+      pythonHead('"""Doc."""\nfrom __future__ import annotations\n\nimport os\n'),
+      '"""Doc."""\nfrom __future__ import annotations\n\n',
+    );
+  });
+
+  it('connect adds the line and doctor reports it missing', async () => {
+    await inProject(
+      {
+        'template.yaml': sam('app.handler'),
+        'app.py': '"""Doc."""\nimport stripe\n',
+        'requirements.txt': 'vallkey\n',
+      },
+      async (cwd) => {
+        assert.match(
+          (await run(['doctor'], { cwd })).stdout,
+          /app\.py runs on AWS Lambda without auto-connect/,
+        );
+        assert.match((await run(['connect', 'python', '--print'], { cwd })).stdout, /In app\.py:/);
+        assert.equal(await readFile(join(cwd, 'app.py'), 'utf8'), '"""Doc."""\nimport stripe\n');
+        await run(['connect', 'python', '--yes'], { cwd });
+        assert.equal(
+          await readFile(join(cwd, 'app.py'), 'utf8'),
+          '"""Doc."""\nimport vallkey.auto\nimport stripe\n',
+        );
+        assert.doesNotMatch((await run(['doctor'], { cwd })).stdout, /without auto-connect/);
+      },
+    );
   });
 });

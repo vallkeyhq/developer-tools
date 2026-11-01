@@ -119,10 +119,63 @@ interface StartEdit {
   after: string;
 }
 
+// Lambda adds your code and layers to Python's path after Python has started, so the
+// package's own startup never runs there and the ghost key goes straight to the provider.
+// The handler has to import it. Comes after any docstring and __future__ import, which
+// must stay first to mean anything.
+const LAMBDA_FILES = ['template.yaml', 'template.yml', 'serverless.yml', 'serverless.yaml'];
+const PYTHON_HOOK = /^\s*(?:import\s+vallkey\.auto|from\s+vallkey\s+import\s+auto)\b/m;
+
+export function pythonHead(text: string) {
+  return (
+    /^(?:[ \t]*(?:#.*)?\r?\n)*(?:[rRuU]?(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"[^"\n]*"|'[^'\n]*')[ \t]*\r?\n)?(?:[ \t]*(?:#.*)?\r?\n|from __future__ import .*\r?\n)*/.exec(
+      text,
+    )?.[0] ?? ''
+  );
+}
+
+async function lambdaEdits(cwd: string, names: Set<string>) {
+  const edits: StartEdit[] = [];
+  const warnings: string[] = [];
+  for (const template of LAMBDA_FILES) {
+    if (!names.has(template)) continue;
+    const text = await readFile(join(cwd, template), 'utf8');
+    if (!/^\s*runtime:\s*['"]?python/im.test(text)) continue;
+    const roots = [
+      '.',
+      ...[...text.matchAll(/^\s*CodeUri:\s*['"]?([\w./-]+)/gim)]
+        .map((m) => m[1])
+        .filter((dir) => !dir.startsWith('/') && !dir.split('/').includes('..')),
+    ];
+    const handlers = [...text.matchAll(/^\s*handler:\s*['"]?([\w./-]+)\.\w+['"]?\s*$/gim)].map((m) =>
+      m[1].replace(/\./g, '/').replace(/^\/+/, ''),
+    );
+    const files = new Set<string>();
+    for (const handler of handlers)
+      for (const root of roots) {
+        const file = join(root, `${handler}.py`);
+        const source = await readFile(join(cwd, file), 'utf8').catch(() => null);
+        if (source === null) continue;
+        files.add(file);
+        if (!PYTHON_HOOK.test(source) && !edits.some((e) => e.file === file)) {
+          const before = pythonHead(source);
+          edits.push({ file, before, after: `${before}import vallkey.auto\n` });
+        }
+        break;
+      }
+    if (!files.size)
+      warnings.push(
+        `${template} runs Python on AWS Lambda. Add this as the first line of your handler file: import vallkey.auto`,
+      );
+  }
+  return { edits, warnings };
+}
+
 // Platforms often ignore package.json: a Procfile, a Dockerfile or the platform's own file
 // says what really runs. A hook added only to the start script would then never load, while
 // everything looks connected, so each of these is found and changed too.
 export async function startEdits(cwd: string, names: Set<string>, lang: string) {
+  if (lang === 'python') return lambdaEdits(cwd, names);
   const edits: StartEdit[] = [];
   const warnings: string[] = [];
   const read = (file: string) => (names.has(file) ? readFile(join(cwd, file), 'utf8') : '');
@@ -807,7 +860,11 @@ export async function hook(args: string[], flags: Flags) {
       if (!(await installStep(lang, cwd, names, flags))) status = 1;
       n++;
     }
-    if ((lang === 'node' || lang === 'bun') && !(await applyStartEdits(cwd, names, lang, flags))) status = 1;
+    if (
+      (lang === 'node' || lang === 'bun' || lang === 'python') &&
+      !(await applyStartEdits(cwd, names, lang, flags))
+    )
+      status = 1;
     if (env) {
       out(`  ${n++}. Set this in your app's environment (hosting dashboard, process manager or shell):`);
       for (const line of envLines(env)) out(`       ${cyan(line)}`);
@@ -852,6 +909,10 @@ export async function hook(args: string[], flags: Flags) {
       );
       detail('Put it in your start command there instead, or on Vercel, on the first line of each function.');
     }
+    if (lang === 'python')
+      detail(
+        'On AWS Lambda, Python starts before it can see your packages: make import vallkey.auto the first line of your handler file.',
+      );
     detail('Optional: VALLKEY_ENV=production names this app in vallkey status and the dashboard.');
     detail('VALLKEY_DEBUG=1 logs each request sent to Vallkey. VALLKEY_AUTO=0 turns auto-connect off.');
   }
