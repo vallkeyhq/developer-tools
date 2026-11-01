@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const OUT = `${ROOT}artifacts/hooks/${VERSION}/`;
 if (existsSync(`${OUT}SHA256SUMS`)) {
   throw new Error(

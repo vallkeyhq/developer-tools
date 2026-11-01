@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vallkey"
-version = "0.3.0"
+version = "0.4.0"
 description = "Vallkey runtime integration for supported Python HTTP clients."
 readme = "README.md"
 license = "MIT"

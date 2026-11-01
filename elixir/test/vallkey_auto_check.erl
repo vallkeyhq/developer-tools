@@ -54,7 +54,7 @@ run() ->
     {_, _, Path, H} = last(),
     F2 = check("path, query and the address it was for are kept", Path =:= <<"/v1/models?limit=2">> andalso proplists:get_value(<<"x-vallkey-host">>, H) =:= <<"api.openai.com">>
         andalso proplists:get_value(<<"host">>, H) =:= iolist_to_binary(["127.0.0.1:", integer_to_list(VPort)])),
-    F9 = check("it says what sent the request", proplists:get_value(<<"x-vallkey-hook">>, H) =:= iolist_to_binary(["erlang/0.1.0; runtime=", erlang:system_info(otp_release), "; platform=gitlab-ci; env=ci"])),
+    F9 = check("it says what sent the request", proplists:get_value(<<"x-vallkey-hook">>, H) =:= iolist_to_binary(["erlang/0.2.0; runtime=", erlang:system_info(otp_release), "; platform=gitlab-ci; env=ci"])),
     F3 = check("a request without a ghost key is left alone", get("http://127.0.0.1:" ++ integer_to_list(PPort) ++ "/plain", [{"authorization", "Bearer sk-real"}]) =:= "provider"),
     last(),
     F4 = check("a ghost key in Basic credentials goes to Vallkey", get("http://api.twilio.com/2010-04-01/Accounts.json", [{"authorization", "Basic " ++ base64:encode_to_string("AC1:" ++ G)}]) =:= "vallkey"),

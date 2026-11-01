@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.vallkey</groupId>
   <artifactId>vallkey-agent</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <name>Vallkey agent</name>
   <description>Vallkey agent for supported Java HTTP clients.</description>
   <url>https://vallkey.com</url>

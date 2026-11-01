@@ -1,6 +1,6 @@
 {
   "name": "vallkey",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Replace the API keys in your project with ghost keys that only work within your rules.",
   "license": "MIT",
   "author": "Vallkey",

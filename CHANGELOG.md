@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## CLI 0.9.0, Python 0.4.0, native hooks 0.2.0
+
+When upgrading: `connect --yes` now changes files and installs packages instead of only printing steps.
+
 - CLI: `connect` changes what a platform really runs as well as the start script: every Procfile process, the final `CMD` or `ENTRYPOINT` of a Dockerfile, `railway.json`, `railway.toml` and `render.yaml`. It says what to add for pm2 and other Dockerfile commands, adds auto-connect to Vercel functions, and `doctor` reports any of these still starting without it.
 - CLI: `doctor` and `connect` previews never run a project's Python; they read its environment folder instead, so they stay read-only in a cloned project.
 - CLI: `connect` installs with `uv pip` in environments that have no pip, changes `requirements.txt` only after the install succeeds, and loads the hook in the command that serves the app: the last command of a chain, by the runtime it really uses.
