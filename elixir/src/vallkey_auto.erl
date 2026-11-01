@@ -7,7 +7,7 @@
 -define(GHOST, "gk_[a-z]{2,20}_[A-Za-z0-9_-]{22}_[A-Za-z0-9_-]{43}").
 -define(HOOK_HEADER, <<"x-vallkey-host">>).
 -define(WHO_HEADER, <<"x-vallkey-hook">>).
--define(VERSION, "0.1.0").
+-define(VERSION, "0.2.0").
 
 %% The platform, from variables each one sets itself. The same list, in the same order, is
 %% in every Vallkey hook, so the dashboard names a place the same way in any language.

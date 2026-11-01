@@ -87,7 +87,7 @@ public final class TransportCheck {
                 check("Apache HttpClient 5 stays on an address already at Vallkey", client.execute(request, response -> org.apache.hc.core5.http.io.entity.EntityUtils.toString(response.getEntity())).equals("gateway"));
             }
             for (String path : List.of("/tagged-okhttp", "/tagged-apache4", "/tagged-apache5")) {
-                check(path + " says which app it is, and nothing else changes", paths.stream().anyMatch(p -> p.startsWith(path + " null java/0.1.0; ")));
+                check(path + " says which app it is, and nothing else changes", paths.stream().anyMatch(p -> p.startsWith(path + " null java/0.2.0; ")));
             }
             check("/plain-okhttp is not named", paths.contains("/plain-okhttp null null"));
 
@@ -95,7 +95,7 @@ public final class TransportCheck {
             // which the advice swallows: the request still works, so only this can show it.
             int port = URI.create(api).getPort();
             var auth = java.util.Map.of("authorization", List.of("Bearer " + ghost));
-            var named = java.util.Map.of("authorization", List.of("Bearer " + ghost), "X-Vallkey-Hook", List.of("java/0.1.0"));
+            var named = java.util.Map.of("authorization", List.of("Bearer " + ghost), "X-Vallkey-Hook", List.of("java/0.2.0"));
             check("a request is named once", com.vallkey.agent.boot.Rewrite.addressed("http", "127.0.0.1", port, null, auth)
                     && !com.vallkey.agent.boot.Rewrite.addressed("http", "127.0.0.1", port, null, named));
         } finally {

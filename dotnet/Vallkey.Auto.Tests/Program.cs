@@ -52,7 +52,7 @@ Check("a ghost key in Authorization goes to Vallkey", await From(await http.Send
 var last = seen[^1];
 Check("path, query, body and the address it was for are kept", last is { Method: "POST", Path: "/v1/chat/completions?x=1", Body: "{\"model\":\"m\"}", From: "api.openai.com" } && last.Host == $"127.0.0.1:{vport}");
 
-Check("it says what sent the request", last.Hook == $"dotnet/0.1.0; runtime={Environment.Version}; platform=cloud-run; env=production");
+Check("it says what sent the request", last.Hook == $"dotnet/0.2.0; runtime={Environment.Version}; platform=cloud-run; env=production");
 
 var plain = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{pport}/plain");
 plain.Headers.Authorization = new("Bearer", "sk-real");

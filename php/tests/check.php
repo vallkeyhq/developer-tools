@@ -29,7 +29,7 @@ check('a ghost key in Authorization goes to Vallkey', from($ch) === 'vallkey');
 $l = last();
 check('path, query, body and the address it was for are kept', $l['method'] === 'POST' && $l['path'] === '/v1/chat/completions?x=1' && $l['body'] === '{"model":"m"}' && $l['from'] === 'api.openai.com' && $l['host'] === '127.0.0.1:18571');
 
-check('it says what sent the request', $l['hook'] === 'php/0.1.0; runtime=' . PHP_VERSION . '; platform=netlify; env=preview');
+check('it says what sent the request', $l['hook'] === 'php/0.2.0; runtime=' . PHP_VERSION . '; platform=netlify; env=preview');
 
 $ch = curl_init('http://127.0.0.1:18572/plain');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);

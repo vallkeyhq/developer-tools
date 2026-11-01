@@ -66,7 +66,7 @@ public class AgentCheck {
         check("HttpClient: a ghost key in Authorization goes to Vallkey", client.send(chat, HttpResponse.BodyHandlers.ofString()).body().equals("vallkey"));
         String[] last = seen.get(seen.size() - 1);
         check("HttpClient: path, query, body and the address it was for are kept", last[1].equals("POST") && last[2].equals("/v1/chat/completions?x=1") && "api.openai.com".equals(last[3]) && last[5].equals("{\"model\":\"m\"}") && ("127.0.0.1:" + vport).equals(last[4]));
-        check("HttpClient: it says what sent the request", ("java/0.1.0; runtime=" + System.getProperty("java.version") + "; platform=railway; env=staging").equals(last[6]));
+        check("HttpClient: it says what sent the request", ("java/0.2.0; runtime=" + System.getProperty("java.version") + "; platform=railway; env=staging").equals(last[6]));
         check("HttpClient: sendAsync too", client.sendAsync(HttpRequest.newBuilder(URI.create("http://api.anthropic.com/v1/models")).header("x-api-key", ghost).build(), HttpResponse.BodyHandlers.ofString()).get().body().equals("vallkey"));
         check("HttpClient: a ghost key in the query", client.send(HttpRequest.newBuilder(URI.create("http://generativelanguage.googleapis.com/v1beta/models?key=" + ghost)).build(), HttpResponse.BodyHandlers.ofString()).body().equals("vallkey"));
         check("HttpClient: a request without a ghost key is left alone", client.send(HttpRequest.newBuilder(URI.create(providerUrl + "/plain")).header("Authorization", "Bearer sk-real").build(), HttpResponse.BodyHandlers.ofString()).body().equals("provider"));
@@ -76,18 +76,18 @@ public class AgentCheck {
         check("HttpURLConnection: a POST body arrives", huc("http://api.stripe.com/v1/customers", "Authorization", "Bearer " + ghost, "email=a%40b.c").equals("vallkey"));
         last = seen.get(seen.size() - 1);
         check("HttpURLConnection: path, body and the address it was for are kept", last[2].equals("/v1/customers") && last[5].equals("email=a%40b.c") && "api.stripe.com".equals(last[3]));
-        check("HttpURLConnection: it says what sent the request", last[6] != null && last[6].startsWith("java/0.1.0; "));
+        check("HttpURLConnection: it says what sent the request", last[6] != null && last[6].startsWith("java/0.2.0; "));
         check("HttpURLConnection: a request without a ghost key is left alone", huc(providerUrl + "/plain", "Authorization", "Bearer sk-real", null).equals("provider"));
 
         String api = System.getenv("VALLKEY_API");
         client.send(HttpRequest.newBuilder(URI.create(api + "/v1/tagged")).header("Authorization", "Bearer " + ghost).POST(HttpRequest.BodyPublishers.ofString("{}")).build(), HttpResponse.BodyHandlers.ofString());
         last = seen.get(seen.size() - 1);
-        check("HttpClient: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/tagged") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.1.0; "));
+        check("HttpClient: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/tagged") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.2.0; "));
         client.send(HttpRequest.newBuilder(URI.create(api + "/v1/plain")).build(), HttpResponse.BodyHandlers.ofString());
         check("HttpClient: one without a ghost key is left alone", seen.get(seen.size() - 1)[6] == null);
         huc(api + "/v1/huc", "Authorization", "Bearer " + ghost, "{}");
         last = seen.get(seen.size() - 1);
-        check("HttpURLConnection: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/huc") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.1.0; "));
+        check("HttpURLConnection: a request already addressed to Vallkey says which app it is, and nothing else changes", last[2].equals("/v1/huc") && last[5].equals("{}") && last[3] == null && last[6] != null && last[6].startsWith("java/0.2.0; "));
         huc(api + "/v1/huc-plain", "Accept", "application/json", null);
         check("HttpURLConnection: one without a ghost key is left alone", seen.get(seen.size() - 1)[6] == null);
 

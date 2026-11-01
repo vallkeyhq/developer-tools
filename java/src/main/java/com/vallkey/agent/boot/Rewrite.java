@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
 public final class Rewrite {
     public static final String HOOK_HEADER = "x-vallkey-host";
     public static final String WHO_HEADER = "x-vallkey-hook";
-    public static final String VERSION = "0.1.0"; // the same as pom.xml
+    public static final String VERSION = "0.2.0"; // the same as pom.xml
     // The platform, from variables each one sets itself. The same list, in the same order,
     // is in every Vallkey hook, so the dashboard names a place the same way in any language.
     private static final String[][] PLATFORMS = {
