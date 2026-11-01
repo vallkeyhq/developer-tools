@@ -16,4 +16,8 @@ regexes = [
   '''^\s*"vallkey-0\.1\.0\.gem": "60cb3fcf5dd5f496ab3bc22c44ea23d3b646a6cb35eac489a12c6cb1d969fe2f",\s*$''',
   '''^\s*"vallkey-agent-0\.1\.0\.jar": "cb7d01d58113bf4abd3e7a72e5a1f388fbc5e0202afb75c2acaf89fad35cf0af",\s*$''',
   '''^\s*"vallkey_auto-0\.1\.0\.beam": "c661bc87f449a628a935a33b6ab42644c8596b8be577fbd89a69d7cd8373336e"\s*$''',
+  '''^\s*"Vallkey\.Auto-0\.2\.0\.dll": "103393cc57ddc4e775f1e1398fb1b3e372687817438af36ec2b6da0e28950f23",\s*$''',
+  '''^\s*"vallkey-0\.2\.0\.gem": "71bd4059dea52c2a9e223f7f1d16c3aeb427d33957e5c2691dc694024f31c226",\s*$''',
+  '''^\s*"vallkey-agent-0\.2\.0\.jar": "c8667a7c4c52aeb27fed770cce7d79065bf543705a0616a54a74465db67b5fa8",\s*$''',
+  '''^\s*"vallkey_auto-0\.2\.0\.beam": "4bcf42652ec18ca22d16f29d343a190da7c54e074d4379fa7da30c53d8d8b7ee"\s*$''',
 ]
