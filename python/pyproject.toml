@@ -1,7 +1,7 @@
 [build-system]
 requires = [
   "hatchling==1.27.0; python_version < '3.10'",
-  "hatchling==1.32.4; python_version >= '3.10'",
+  "hatchling==1.33.0; python_version >= '3.10'",
 ]
 build-backend = "hatchling.build"
 
